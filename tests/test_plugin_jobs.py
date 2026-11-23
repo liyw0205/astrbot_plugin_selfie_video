@@ -229,3 +229,21 @@ def test_invalid_config_is_backed_up_before_defaults_are_written(tmp_path, monke
     assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
     assert json.loads(config_path.read_text(encoding="utf-8"))["video_channels"] == []
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+
+
+def test_astrbot_default_token_does_not_rotate_saved_dashboard_token(tmp_path, monkeypatch):
+    data_dir = tmp_path / "plugin_data" / plugin_module.PLUGIN_NAME
+    data_dir.mkdir(parents=True)
+    config_path = data_dir / plugin_module.PLUGIN_CONFIG_FILENAME
+    config_path.write_text(
+        json.dumps({"web": {"enable": True, "token": "persisted-random-token"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(plugin_module, "get_astrbot_data_path", lambda: str(tmp_path))
+
+    plugin = plugin_module.SelfieVideoPlugin(
+        context=None,
+        config={"web": {"enable": True, "token": "changeme"}},
+    )
+
+    assert plugin.settings["web"]["token"] == "persisted-random-token"

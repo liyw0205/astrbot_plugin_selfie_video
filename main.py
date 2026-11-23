@@ -233,7 +233,13 @@ class SelfieVideoPlugin(Star):
             _save_json(self.config_path, existing)
         native_web = native.get("web") if isinstance(native.get("web"), dict) else {}
         if native_web:
-            existing["web"] = {**existing.get("web", {}), **native_web}
+            saved_web = existing.get("web") if isinstance(existing.get("web"), dict) else {}
+            existing["web"] = {**saved_web, **native_web}
+            if (
+                str(native_web.get("token") or "").strip().lower() == "changeme"
+                and str(saved_web.get("token") or "").strip().lower() not in {"", "changeme"}
+            ):
+                existing["web"]["token"] = saved_web["token"]
         self.settings = normalize_config(existing)
         self.store = VideoJobStore(os.path.join(self.data_dir, "video_jobs.sqlite3"))
         self.store.recover_interrupted()
