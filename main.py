@@ -475,7 +475,10 @@ class SelfieVideoPlugin(Star):
             if failed and event is not None:
                 await self._send(event, f"视频生成失败（{exc.stage}）：{exc}")
         except Exception as exc:
-            safe_error = _redact(f"{type(exc).__name__}: {exc}", targets[0])[:800] if targets else type(exc).__name__
+            safe_error = f"{type(exc).__name__}: {exc}"
+            for target in targets:
+                safe_error = _redact(safe_error, target)
+            safe_error = safe_error[:800]
             logger.error("视频任务异常，任务号 %s，错误类型 %s", job_id, type(exc).__name__)
             failed = self.store.update_if_status(
                 job_id, ["queued", "running"], status="failed", error=safe_error

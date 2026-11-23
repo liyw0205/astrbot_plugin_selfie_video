@@ -247,3 +247,28 @@ def test_astrbot_default_token_does_not_rotate_saved_dashboard_token(tmp_path, m
     )
 
     assert plugin.settings["web"]["token"] == "persisted-random-token"
+
+
+def test_unexpected_provider_error_redacts_keys_from_every_fallback_target(tmp_path, monkeypatch, caplog):
+    plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
+    targets = [
+        VideoTarget("first", "openai_video", "https://first.example/v1", "first-secret", "model-a"),
+        VideoTarget("second", "openai_video", "https://second.example/v1", "second-secret", "model-b"),
+    ]
+
+    async def unexpected_failure(*args, **kwargs):
+        raise RuntimeError("upstream leaked second-secret")
+
+    monkeypatch.setattr(plugin_module, "generate_video_with_fallback", unexpected_failure)
+
+    async def scenario():
+        plugin._loop = asyncio.get_running_loop()
+        plugin.store.create("SECRET1", "user-1", "clip")
+        await plugin._run_job("SECRET1", "user-1", None, VideoGenerateRequest("clip"), targets)
+        row = plugin.store.get("SECRET1")
+        assert row["status"] == "failed"
+        assert "second-secret" not in row["error"]
+        assert "[redacted]" in row["error"]
+
+    asyncio.run(scenario())
+    assert "second-secret" not in caplog.text
