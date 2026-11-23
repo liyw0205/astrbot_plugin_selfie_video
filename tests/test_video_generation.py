@@ -67,6 +67,11 @@ def test_agnes_payloads_follow_model_family_and_validate_local_reference():
     with pytest.raises(VideoGenerationError, match="公开访问"):
         build_create_payload(v20, VideoGenerateRequest("animate", first_frame="data:image/png;base64,AA=="))
 
+    frames = ["https://cdn.example/frame-1.png", "https://cdn.example/frame-2.png"]
+    payload = build_create_payload(v20, VideoGenerateRequest("animate", extra={"images": frames}))
+    assert payload["image"] == frames[0]
+    assert payload["extra_body"] == {"image": frames, "mode": "keyframes"}
+
 
 def test_compatible_payload_and_nested_response_extractors():
     target = VideoTarget("gw", "openai_video", "https://example.test/v1", "k", "rh-minimax-h3")
@@ -104,6 +109,7 @@ def test_config_keeps_protocol_explicit_and_orders_targets():
 
 def test_async_compatible_create_poll_download_and_secret_redaction(tmp_path):
     calls = []
+    poll_count = 0
     mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 24
 
     async def create(request):
@@ -112,7 +118,11 @@ def test_async_compatible_create_poll_download_and_secret_redaction(tmp_path):
         return web.json_response({"id": "task-1", "status": "queued"})
 
     async def poll(request):
+        nonlocal poll_count
+        poll_count += 1
         calls.append(("poll", request.path))
+        if poll_count == 1:
+            return web.json_response({"status": "processing"})
         return web.json_response({"status": "completed", "result": {"video_url": f"http://{request.host}/out.mp4"}})
 
     async def download(request):
@@ -143,7 +153,7 @@ def test_async_compatible_create_poll_download_and_secret_redaction(tmp_path):
     assert result.channel_name == "local"
     assert result.used_model == "model"
     assert os.path.exists(result.video_path)
-    assert [name for name, _ in calls] == ["create", "poll", "download"]
+    assert [name for name, _ in calls] == ["create", "poll", "poll", "download"]
     assert calls[0][1]["prompt"] == "a test clip"
 
 

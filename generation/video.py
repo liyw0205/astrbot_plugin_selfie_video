@@ -198,6 +198,8 @@ def _agnes_payload(target: VideoTarget, request: VideoGenerateRequest) -> Dict[s
         last_frame = keyframes[1]
     if not first_frame and family == "v20" and images:
         first_frame = images[0]
+        if not keyframes and len(images) > 1:
+            keyframes = images
 
     for media_url in (first_frame, last_frame, *keyframes, *images, *audios, *videos):
         if media_url and not media_url.lower().startswith(("https://", "http://")):
