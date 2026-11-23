@@ -3,6 +3,7 @@ import json
 import stat
 import sys
 import threading
+import types
 from pathlib import Path
 
 from aiohttp import web
@@ -24,6 +25,23 @@ def _target():
 def _plugin(tmp_path, monkeypatch, **config):
     monkeypatch.setattr(plugin_module, "get_astrbot_data_path", lambda: str(tmp_path))
     return plugin_module.SelfieVideoPlugin(context=None, config=config)
+
+
+def _stub_video_component(monkeypatch):
+    class VideoComponent:
+        def __init__(self, *, file):
+            self.file = file
+
+    astrbot = types.ModuleType("astrbot")
+    astrbot.__path__ = []
+    api = types.ModuleType("astrbot.api")
+    api.__path__ = []
+    message_components = types.ModuleType("astrbot.api.message_components")
+    message_components.Video = VideoComponent
+    monkeypatch.setitem(sys.modules, "astrbot", astrbot)
+    monkeypatch.setitem(sys.modules, "astrbot.api", api)
+    monkeypatch.setitem(sys.modules, "astrbot.api.message_components", message_components)
+    return VideoComponent
 
 
 def test_submit_and_cancel_before_runner_starts_keeps_terminal_state(tmp_path, monkeypatch):
@@ -314,6 +332,7 @@ def test_video_command_runs_agnes_http_flow_and_persists_sqlite_job(tmp_path, mo
 
 def test_video_command_runs_compatible_async_http_flow(tmp_path, monkeypatch):
     plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
+    video_component = _stub_video_component(monkeypatch)
     calls = []
     poll_count = 0
     mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 24
@@ -404,7 +423,13 @@ def test_video_command_runs_compatible_async_http_flow(tmp_path, monkeypatch):
             assert calls[0][3]["aspect_ratio"] == "16:9"
             assert calls[1][1] == "/v1/videos/generations/compatible-e2e-1"
             assert any("视频生成完成" in item for item in event.sent)
-            assert any("视频文件已保存" in item and row["video_path"] in item for item in event.sent)
+            assert any(
+                isinstance(item, list)
+                and len(item) == 1
+                and isinstance(item[0], video_component)
+                and item[0].file == row["video_path"]
+                for item in event.sent
+            )
         finally:
             await plugin.terminate()
             await runner.cleanup()
