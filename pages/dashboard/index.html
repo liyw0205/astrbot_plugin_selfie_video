@@ -167,6 +167,8 @@
           <label>视频下载上限（MiB）<input id="setting-download" type="number" min="1" max="2048"></label>
           <label class="check-row"><input id="setting-enabled" type="checkbox">启用视频生成</label>
           <label class="wide">模型优先级（每行填写 `渠道名/模型名`）<textarea id="setting-priority"></textarea></label>
+          <label class="wide">允许使用的账号（逗号或换行分隔；留空允许所有账号）<textarea id="setting-usable-users"></textarea></label>
+          <label class="wide">禁止使用的账号（逗号或换行分隔）<textarea id="setting-blocked-users"></textarea></label>
         </div>
         <div class="settings-actions"><button class="primary" id="save-settings" type="button">保存设置</button><span class="message" id="settings-message" role="status"></span></div>
       </section>
@@ -260,6 +262,9 @@
         $("#setting-download").value = video.max_download_mb ?? 512;
         $("#setting-enabled").checked = video.enable !== false;
         $("#setting-priority").value = (state.config.enabled_video_model_priority || []).join("\n");
+        const permission = state.config.permission || {};
+        $("#setting-usable-users").value = Array.isArray(permission.usable_users) ? permission.usable_users.join("\n") : (permission.usable_users || "");
+        $("#setting-blocked-users").value = Array.isArray(permission.blocked_users) ? permission.blocked_users.join("\n") : (permission.blocked_users || "");
       };
       const renderJobs = (jobs) => {
         const body = $("#jobs-body"); body.replaceChildren();
@@ -397,6 +402,11 @@
           max_download_mb: Number($("#setting-download").value) || 512
         };
         state.config.enabled_video_model_priority = $("#setting-priority").value.split(/[\n,;]+/).map((item) => item.trim()).filter(Boolean);
+        state.config.permission = {
+          ...state.config.permission,
+          usable_users: $("#setting-usable-users").value,
+          blocked_users: $("#setting-blocked-users").value
+        };
         try { await saveConfig("#settings-message"); }
         catch (error) { setMessage("#settings-message", error.message, true); }
       });

@@ -131,6 +131,22 @@ def test_blank_key_update_preserves_secret_and_validates_protocol(tmp_path):
     assert response.status_code == 400
 
 
+def test_permission_settings_can_be_updated_without_replacing_channels(tmp_path):
+    plugin = FakePlugin(tmp_path)
+    client = VideoWebServer(plugin).app.test_client()
+    response = client.put(
+        "/api/config",
+        headers={"Authorization": "Bearer panel-secret"},
+        json={"permission": {"usable_users": "user-1,user-2", "blocked_users": "user-3"}},
+    )
+    assert response.status_code == 200
+    assert plugin.settings["permission"] == {
+        "usable_users": "user-1,user-2",
+        "blocked_users": "user-3",
+    }
+    assert plugin.settings["video_channels"][0]["api_key"] == "test-api-key"
+
+
 def test_job_api_does_not_return_local_paths_or_source_urls(tmp_path):
     client = VideoWebServer(FakePlugin(tmp_path)).app.test_client()
     response = client.get("/api/jobs", headers={"Authorization": "Bearer panel-secret"})
