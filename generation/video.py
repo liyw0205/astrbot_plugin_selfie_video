@@ -180,6 +180,17 @@ def _agnes_media_list(value: Any) -> List[str]:
     return result
 
 
+def _validate_http_media_references(values: Iterable[Any], *, protocol: str) -> None:
+    for value in values:
+        for media_url in _agnes_media_list(value):
+            parsed = urlparse(media_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise VideoGenerationError(
+                    f"{protocol} 视频参考媒体必须是可公开访问的 HTTP(S) URL；未提交任务。",
+                    stage="validate",
+                )
+
+
 def _agnes_payload(target: VideoTarget, request: VideoGenerateRequest) -> Dict[str, Any]:
     extra = dict(request.extra or {})
     family = _agnes_model_family(target.model)
@@ -201,12 +212,10 @@ def _agnes_payload(target: VideoTarget, request: VideoGenerateRequest) -> Dict[s
         if not keyframes and len(images) > 1:
             keyframes = images
 
-    for media_url in (first_frame, last_frame, *keyframes, *images, *audios, *videos):
-        if media_url and not media_url.lower().startswith(("https://", "http://")):
-            raise VideoGenerationError(
-                "Agnes 视频参考帧必须是可公开访问的 HTTP(S) 图片 URL；未提交任务。",
-                stage="validate",
-            )
+    _validate_http_media_references(
+        (first_frame, last_frame, keyframes, images, audios, videos),
+        protocol="Agnes",
+    )
     if family in {"v25", "v25_flash"}:
         flash = family == "v25_flash"
         duration = max(4, min(12, int(request.duration or 5)))
@@ -309,8 +318,25 @@ def _compatible_payload(target: VideoTarget, request: VideoGenerateRequest) -> D
         if ratio:
             payload["aspect_ratio"] = ratio
     extra = dict(request.extra or {})
-    image = str(request.first_frame or extra.pop("image", "") or extra.pop("image_url", "")).strip()
+    image_candidates = [
+        request.first_frame,
+        extra.pop("image", ""),
+        extra.pop("image_url", ""),
+        extra.get("first_frame", ""),
+    ]
+    image = next((str(value).strip() for value in image_candidates if str(value or "").strip()), "")
     images = _agnes_media_list(extra.pop("images", []))
+    _validate_http_media_references(
+        (
+            image_candidates,
+            images,
+            extra.get("last_frame"),
+            extra.get("keyframes"),
+            extra.get("videos"),
+            extra.get("audios"),
+        ),
+        protocol="兼容渠道",
+    )
     if image:
         payload["image"] = image
     elif images:

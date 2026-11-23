@@ -91,6 +91,25 @@ def test_compatible_payload_and_nested_response_extractors():
     assert _extract_video_url({"data": {"b64_json": "YWJj"}}) == "data:video/mp4;base64,YWJj"
 
 
+def test_compatible_payload_rejects_local_media_before_submission():
+    target = VideoTarget("gw", "openai_video", "https://example.test/v1", "k", "model")
+
+    with pytest.raises(VideoGenerationError, match="未提交任务"):
+        build_create_payload(target, VideoGenerateRequest("animate", first_frame="/tmp/frame.png"))
+
+    with pytest.raises(VideoGenerationError, match="未提交任务"):
+        build_create_payload(
+            target,
+            VideoGenerateRequest("animate", extra={"keyframes": ["file:///tmp/frame.png"]}),
+        )
+
+    payload = build_create_payload(
+        target,
+        VideoGenerateRequest("animate", first_frame="https://cdn.example/frame.png"),
+    )
+    assert payload["image"] == "https://cdn.example/frame.png"
+
+
 def test_config_keeps_protocol_explicit_and_orders_targets():
     targets = build_video_targets({
         "video_channels": [
