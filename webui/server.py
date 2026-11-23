@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import hmac
@@ -16,7 +17,12 @@ from werkzeug.serving import BaseWSGIServer, make_server
 
 from ..core.backup import MAX_ARCHIVE_BYTES, VideoBackupError
 from ..core.config import build_video_targets, normalize_config
-from ..generation.video import VideoGenerateRequest, normalize_video_provider_type
+from ..generation.video import (
+    VideoGenerateRequest,
+    VideoGenerationError,
+    normalize_video_provider_type,
+    probe_video_model,
+)
 
 
 class VideoWebServer:
@@ -341,6 +347,31 @@ class VideoWebServer:
             except (VideoBackupError, OSError, sqlite3.Error) as exc:
                 return jsonify({"error": str(exc)}), 400
             return jsonify({"ok": True, "restore": result}), 202
+
+        @self.app.post("/api/probe")
+        def probe_channel():
+            unauthorized = self._require_auth()
+            if unauthorized:
+                return unauthorized
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict):
+                return jsonify({"error": "请求体必须是 JSON 对象。"}), 400
+            channel_name = str(payload.get("channel_name") or "").strip()
+            model = str(payload.get("model") or "").strip()
+            if not channel_name or not model:
+                return jsonify({"error": "请选择渠道和模型。"}), 400
+            target = next(
+                (item for item in build_video_targets(self.plugin.get_settings_snapshot())
+                 if item.channel_name == channel_name and item.model == model),
+                None,
+            )
+            if not target:
+                return jsonify({"error": "没有找到所选启用渠道和模型。"}), 404
+            try:
+                result = asyncio.run(probe_video_model(target))
+            except VideoGenerationError as exc:
+                return jsonify({"error": str(exc)}), 502
+            return jsonify(result)
 
         @self.app.post("/api/test")
         def test_channel():

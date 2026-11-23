@@ -19,8 +19,10 @@ from astrbot_plugin_selfie_video.generation.video import (
     build_agnes_videos_endpoint,
     build_create_payload,
     build_video_generations_endpoint,
+    build_video_models_endpoint,
     generate_video,
     generate_video_with_fallback,
+    probe_video_model,
 )
 
 
@@ -34,6 +36,9 @@ def test_endpoint_builders_accept_root_and_full_endpoint():
     assert build_video_generations_endpoint("https://example.test") == "https://example.test/v1/videos/generations"
     assert build_video_generations_endpoint("https://example.test/v1/videos/generations") == "https://example.test/v1/videos/generations"
     assert build_video_generations_endpoint("https://example.test/v1/videos") == "https://example.test/v1/videos/generations"
+    assert build_video_models_endpoint("https://example.test") == "https://example.test/v1/models"
+    assert build_video_models_endpoint("https://example.test/v1") == "https://example.test/v1/models"
+    assert build_video_models_endpoint("https://example.test/v1/videos/generations") == "https://example.test/v1/models"
 
 
 def test_agnes_payloads_follow_model_family_and_validate_local_reference():
@@ -155,6 +160,41 @@ def test_compatible_payload_rejects_local_media_before_submission():
         VideoGenerateRequest("animate", first_frame="https://cdn.example/frame.png"),
     )
     assert payload["image"] == "https://cdn.example/frame.png"
+
+
+def test_model_probe_reads_catalog_without_submitting_generation(tmp_path):
+    calls = []
+
+    async def models(request):
+        calls.append((request.method, request.path))
+        assert request.headers["Authorization"] == "Bearer probe-secret"
+        return web.json_response({
+            "data": [{"id": "rh-minimax-h3", "supported_endpoint_types": ["openai"]}],
+        })
+
+    async def run_probe():
+        app = web.Application()
+        app.router.add_get("/v1/models", models)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        target = VideoTarget(
+            "probe", "openai_video", f"http://127.0.0.1:{port}/v1",
+            "probe-secret", "rh-minimax-h3", timeout=10,
+        )
+        try:
+            return await probe_video_model(target)
+        finally:
+            await runner.cleanup()
+
+    result = _run(run_probe())
+    assert result["listed"] is True
+    assert result["supported_endpoint_types"] == ["openai"]
+    assert result["video_advertised"] is False
+    assert "没有创建任务" in result["message"]
+    assert calls == [("GET", "/v1/models")]
 
 
 def test_config_keeps_protocol_explicit_and_orders_targets():

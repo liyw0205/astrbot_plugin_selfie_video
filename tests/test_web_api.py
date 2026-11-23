@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_selfie_video.core.config import normalize_config
 from astrbot_plugin_selfie_video import main as plugin_module
+from astrbot_plugin_selfie_video.webui import server as server_module
 from astrbot_plugin_selfie_video.webui.server import VideoWebServer
 
 
@@ -103,6 +104,17 @@ def test_config_api_requires_token_and_masks_secrets(tmp_path):
     assert body["video_channels"][0]["api_key"] == ""
     assert "test-api-key" not in response.get_data(as_text=True)
     assert "panel-secret" not in response.get_data(as_text=True)
+
+
+def test_dashboard_separates_model_probe_from_billable_generation_test(tmp_path):
+    client = VideoWebServer(FakePlugin(tmp_path)).app.test_client()
+    response = client.get("/")
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'id="probe-button"' in html
+    assert 'api("/api/probe"' in html
+    assert 'id="test-button"' in html
+    assert 'api("/api/test"' in html
 
 
 def test_dashboard_cross_origin_preflight_allows_bearer_auth_headers(tmp_path):
@@ -210,6 +222,44 @@ def test_web_test_endpoint_enqueues_instead_of_blocking_for_generation(tmp_path)
     assert owner == "web-admin"
     assert request_data.prompt == "a short clip"
     assert targets[0].provider_type == "agnes"
+
+
+def test_model_probe_endpoint_is_authenticated_and_non_generating(monkeypatch, tmp_path):
+    plugin = FakePlugin(tmp_path)
+    calls = []
+
+    async def probe(target):
+        calls.append((target.channel_name, target.model, target.api_key))
+        return {
+            "channel_name": target.channel_name,
+            "model": target.model,
+            "listed": True,
+            "supported_endpoint_types": ["openai"],
+            "video_advertised": False,
+            "message": "模型目录未声明视频端点；此检查没有创建任务。",
+        }
+
+    monkeypatch.setattr(server_module, "probe_video_model", probe)
+    client = VideoWebServer(plugin).app.test_client()
+    assert client.post(
+        "/api/probe", json={"channel_name": "primary", "model": "agnes-video-2.0"}
+    ).status_code == 401
+    invalid = client.post(
+        "/api/probe",
+        headers={"Authorization": "Bearer panel-secret"},
+        json=[],
+    )
+    assert invalid.status_code == 400
+    response = client.post(
+        "/api/probe",
+        headers={"Authorization": "Bearer panel-secret"},
+        json={"channel_name": "primary", "model": "agnes-video-2.0"},
+    )
+    assert response.status_code == 200
+    assert response.get_json()["video_advertised"] is False
+    assert "test-api-key" not in response.get_data(as_text=True)
+    assert calls == [("primary", "agnes-video-2.0", "test-api-key")]
+    assert not hasattr(plugin, "submitted")
 
 
 def test_web_test_endpoint_respects_global_video_disable_setting(tmp_path):

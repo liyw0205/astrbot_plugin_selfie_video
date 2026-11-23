@@ -107,6 +107,23 @@ def build_video_generations_endpoint(base_url: str) -> str:
     return f"{base}/v1/videos/generations"
 
 
+def build_video_models_endpoint(base_url: str) -> str:
+    raw = str(base_url or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    path = parsed.path.rstrip("/")
+    if path.lower().endswith("/models"):
+        model_path = path
+    else:
+        version = re.search(r"/v1(?:/|$)", path, re.IGNORECASE)
+        if version:
+            model_path = f"{path[:version.start()]}/v1/models"
+        else:
+            model_path = f"{path}/v1/models"
+    return parsed._replace(path=model_path, params="", query="", fragment="").geturl()
+
+
 def build_agnes_videos_endpoint(base_url: str) -> str:
     base = str(base_url or "").strip().rstrip("/")
     if not base:
@@ -524,6 +541,101 @@ async def _request_json(
         raise
     except Exception as exc:
         raise VideoGenerationError(_redact(exc, target), stage=stage) from exc
+
+
+def _summarize_video_model(target: VideoTarget, response: Any) -> Dict[str, Any]:
+    rows: List[Any] = []
+    if isinstance(response, list):
+        rows = response
+    elif isinstance(response, dict):
+        for key in ("data", "models"):
+            value = response.get(key)
+            if isinstance(value, list):
+                rows = value
+                break
+    model_row = next(
+        (
+            row for row in rows
+            if isinstance(row, dict)
+            and str(row.get("id") or row.get("model") or row.get("name") or "").strip() == target.model
+        ),
+        None,
+    )
+    raw_types = model_row.get("supported_endpoint_types") if model_row else None
+    if isinstance(raw_types, str):
+        endpoint_types: Optional[List[str]] = [raw_types.strip()[:80]] if raw_types.strip() else []
+    elif isinstance(raw_types, list):
+        endpoint_types = [str(value).strip()[:80] for value in raw_types if str(value).strip()][:32]
+    else:
+        endpoint_types = None
+    video_advertised = (
+        any("video" in value.lower() for value in endpoint_types)
+        if endpoint_types is not None
+        else None
+    )
+    if model_row is None:
+        message = "模型未出现在目录中；此检查没有创建生成任务。"
+    elif endpoint_types is None:
+        message = "模型已列出，但目录未公布支持的端点类型；此检查没有创建生成任务。"
+    elif video_advertised:
+        message = "模型目录声明支持视频端点；此检查没有创建任务，实际生成仍需单独验收。"
+    else:
+        message = "模型目录未声明视频端点；此检查没有创建任务，也不能证明上游一定不支持视频。"
+    return {
+        "channel_name": target.channel_name,
+        "model": target.model,
+        "listed": model_row is not None,
+        "supported_endpoint_types": endpoint_types,
+        "video_advertised": video_advertised,
+        "message": message,
+    }
+
+
+async def probe_video_model(
+    target: VideoTarget,
+    *,
+    session: Optional[aiohttp.ClientSession] = None,
+) -> Dict[str, Any]:
+    """Read model catalog metadata without creating a potentially billable task."""
+    provider = normalize_video_provider_type(target.provider_type)
+    if not provider:
+        raise VideoGenerationError(f"不支持的视频协议：{target.provider_type}", stage="probe")
+    endpoint = build_video_models_endpoint(target.base_url)
+    if not endpoint or not target.model:
+        raise VideoGenerationError("视频渠道缺少 Base URL 或模型名。", stage="probe")
+    keys = target.resolved_api_keys()
+    if not keys:
+        raise VideoGenerationError("视频渠道缺少 API Key。", stage="probe")
+
+    owned_session = session is None
+    client = session or aiohttp.ClientSession()
+    try:
+        for index, api_key in enumerate(keys):
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json",
+                "User-Agent": "SelfieVideo/0.1",
+            }
+            try:
+                response = await _request_json(
+                    client,
+                    "GET",
+                    endpoint,
+                    headers=headers,
+                    target=target,
+                    timeout=20,
+                    stage="probe",
+                    use_urllib=provider == "agnes",
+                )
+            except VideoGenerationError as exc:
+                if exc.status_code in {401, 402, 403, 429} and index + 1 < len(keys):
+                    continue
+                raise
+            return _summarize_video_model(target, response)
+        raise VideoGenerationError("视频渠道模型目录检查失败。", stage="probe")
+    finally:
+        if owned_session:
+            await client.close()
 
 
 def _request_json_urllib(
