@@ -522,6 +522,114 @@ def test_video_command_cancels_compatible_poll_without_delivering_result(tmp_pat
     asyncio.run(scenario())
 
 
+def test_agnes_cancel_during_urllib_download_removes_partial_file(tmp_path, monkeypatch):
+    plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
+    calls = []
+    download_started = asyncio.Event()
+    release_download = asyncio.Event()
+    download_finished = asyncio.Event()
+    mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 24
+
+    async def create(request):
+        calls.append("create")
+        return web.json_response({"video_id": "agnes-cancel-download", "status": "processing"})
+
+    async def poll(request):
+        calls.append("poll")
+        return web.json_response({
+            "status": "completed",
+            "metadata": {"url": f"http://{request.host}/slow.mp4"},
+        })
+
+    async def download(request):
+        calls.append("download")
+        response = web.StreamResponse(headers={"Content-Type": "video/mp4"})
+        await response.prepare(request)
+        await response.write(mp4[:16])
+        download_started.set()
+        await release_download.wait()
+        await response.write(mp4[16:])
+        await response.write_eof()
+        download_finished.set()
+        return response
+
+    class Event:
+        def __init__(self):
+            self.sent = []
+
+        def get_sender_id(self):
+            return "user-agnes-download-cancel"
+
+        def get_message_str(self):
+            return "/视频 a cancellable Agnes download"
+
+        def plain_result(self, text):
+            return text
+
+        def chain_result(self, chain):
+            return chain
+
+        async def send(self, message):
+            self.sent.append(message)
+
+    async def scenario():
+        app = web.Application()
+        app.router.add_post("/v1/videos", create)
+        app.router.add_get("/agnesapi", poll)
+        app.router.add_get("/slow.mp4", download)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        plugin.replace_settings({
+            "web": {"enable": False},
+            "video": {"global_timeout": 30, "poll_interval": 1},
+            "video_channels": [{
+                "name": "agnes-local",
+                "enabled": True,
+                "provider_type": "agnes",
+                "base_url": f"http://127.0.0.1:{port}/v1",
+                "api_key": "local-agnes-key",
+                "model": "agnes-video-2.0",
+                "poll_interval": 1,
+            }],
+        })
+        event = Event()
+        try:
+            accepted = [item async for item in plugin.cmd_video(event)]
+            job_id = accepted[0].split("：", 1)[1].split("。", 1)[0]
+            task = plugin._running[job_id]
+            await asyncio.wait_for(download_started.wait(), timeout=5)
+
+            assert plugin.cancel_job(job_id, owner_id="user-agnes-download-cancel") is True
+            try:
+                await asyncio.wait_for(task, timeout=5)
+            except asyncio.CancelledError:
+                pass
+            else:
+                raise AssertionError("cancelled Agnes download task should stop")
+            assert plugin.store.get(job_id)["status"] == "cancelled"
+
+            release_download.set()
+            await asyncio.wait_for(download_finished.wait(), timeout=5)
+            deadline = asyncio.get_running_loop().time() + 2
+            partial_files = list(Path(plugin.video_dir).glob("*.part"))
+            while partial_files and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.01)
+                partial_files = list(Path(plugin.video_dir).glob("*.part"))
+            assert partial_files == []
+            assert list(Path(plugin.video_dir).glob("*.mp4")) == []
+            assert calls == ["create", "poll", "download"]
+            assert event.sent == []
+        finally:
+            release_download.set()
+            await plugin.terminate()
+            await runner.cleanup()
+
+    asyncio.run(scenario())
+
+
 def test_invalid_config_is_backed_up_before_defaults_are_written(tmp_path, monkeypatch):
     data_dir = tmp_path / "plugin_data" / plugin_module.PLUGIN_NAME
     data_dir.mkdir(parents=True)

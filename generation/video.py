@@ -691,8 +691,8 @@ async def _download_video(
         total = 0
         urllib_error: Optional[VideoGenerationError] = None
         if use_urllib and not str(target.proxy or "").lower().startswith(("socks5://", "socks5h://")):
-            try:
-                total, header_bytes = await asyncio.to_thread(
+            download_task = asyncio.create_task(
+                asyncio.to_thread(
                     _download_video_urllib,
                     url,
                     target=target,
@@ -700,6 +700,22 @@ async def _download_video(
                     max_bytes=max_bytes,
                     timeout=request_timeout,
                 )
+            )
+            try:
+                total, header_bytes = await asyncio.shield(download_task)
+            except asyncio.CancelledError:
+                def cleanup_after_cancel(future: asyncio.Future) -> None:
+                    try:
+                        future.exception()
+                    except asyncio.CancelledError:
+                        pass
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
+
+                download_task.add_done_callback(cleanup_after_cancel)
+                raise
             except VideoGenerationError as exc:
                 try:
                     os.remove(temp_path)
