@@ -234,6 +234,44 @@ def test_create_error_does_not_retry_another_channel():
     assert requests_seen == ["/v1/videos/generations"]
 
 
+def test_ambiguous_create_timeout_never_resubmits(tmp_path):
+    seen = []
+
+    async def create(request):
+        seen.append(request.path)
+        await asyncio.sleep(2)
+        return web.json_response({"task_id": "eventually-created"})
+
+    async def run_timeout():
+        app = web.Application()
+        app.router.add_post("/v1/videos/generations", create)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        base = f"http://127.0.0.1:{port}/v1"
+        targets = [
+            VideoTarget("first", "openai_video", base, "k1", "model-a", timeout=1),
+            VideoTarget("second", "openai_video", base, "k2", "model-b", timeout=10),
+        ]
+        try:
+            with pytest.raises(VideoGenerationError) as error:
+                await generate_video_with_fallback(
+                    targets,
+                    VideoGenerateRequest("clip"),
+                    output_dir=str(tmp_path),
+                )
+            return error.value
+        finally:
+            await runner.cleanup()
+
+    error = _run(run_timeout())
+    assert error.stage == "create"
+    assert error.status_code is None
+    assert seen == ["/v1/videos/generations"]
+
+
 def test_explicit_auth_error_retries_next_key_without_logging_keys(tmp_path):
     seen = []
     mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 24

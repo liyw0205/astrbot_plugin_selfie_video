@@ -587,13 +587,14 @@ def _download_video_urllib(
     target: VideoTarget,
     temp_path: str,
     max_bytes: int,
+    timeout: int,
 ) -> Tuple[int, bytes]:
     request = UrlRequest(url, headers={"User-Agent": "SelfieVideo/0.1"}, method="GET")
     proxy = str(target.proxy or "").strip()
     proxies = {"http": proxy, "https": proxy} if proxy else {}
     opener = build_opener(ProxyHandler(proxies)) if proxy else build_opener()
     try:
-        with opener.open(request, timeout=max(30, target.timeout)) as response:
+        with opener.open(request, timeout=max(1, timeout)) as response:
             length = response.headers.get("Content-Length")
             if length and int(length) > max_bytes:
                 raise VideoGenerationError("上游视频超过下载大小限制。", stage="download")
@@ -634,7 +635,9 @@ async def _download_video(
     output_dir: str,
     max_bytes: int = 512 * 1024 * 1024,
     use_urllib: bool = False,
+    timeout: Optional[int] = None,
 ) -> str:
+    request_timeout = max(1, int(timeout or target.timeout))
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, f"video_{uuid.uuid4().hex}.mp4")
     temp_path = f"{path}.part"
@@ -669,6 +672,7 @@ async def _download_video(
                     target=target,
                     temp_path=temp_path,
                     max_bytes=max_bytes,
+                    timeout=request_timeout,
                 )
             except VideoGenerationError as exc:
                 try:
@@ -684,7 +688,7 @@ async def _download_video(
             try:
                 async with session.get(
                     url,
-                    timeout=aiohttp.ClientTimeout(total=max(30, target.timeout)),
+                    timeout=aiohttp.ClientTimeout(total=request_timeout),
                     proxy=target.proxy or None,
                 ) as response:
                     if response.status >= 400:
@@ -747,6 +751,7 @@ async def generate_video(
     session: Optional[aiohttp.ClientSession] = None,
 ) -> VideoGenerateResult:
     started = time.monotonic()
+    deadline = started + max(1, int(target.timeout))
     provider = normalize_video_provider_type(target.provider_type)
     if not provider:
         raise VideoGenerationError(f"不支持的视频协议：{target.provider_type}", stage="validate")
@@ -771,6 +776,9 @@ async def generate_video(
             }
             endpoint = build_agnes_videos_endpoint(target.base_url) if provider == "agnes" else build_video_generations_endpoint(target.base_url)
             payload = build_create_payload(target, request)
+            create_remaining = deadline - time.monotonic()
+            if create_remaining <= 0:
+                raise VideoGenerationError("视频任务全局超时已到。", stage="create")
             try:
                 # A create timeout is ambiguous and may already have incurred a charge.
                 submission = await _request_json(
@@ -780,7 +788,7 @@ async def generate_video(
                     headers=headers,
                     target=target,
                     payload=payload,
-                    timeout=min(90, max(1, target.timeout)),
+                    timeout=min(90, max(1, int(create_remaining))),
                     stage="create",
                     use_urllib=provider == "agnes",
                 )
@@ -798,7 +806,6 @@ async def generate_video(
                         "上游未返回视频地址或任务号。",
                         stage="create",
                     )
-                deadline = time.monotonic() + max(1, int(target.timeout))
                 poll_urls = (
                     _agnes_poll_urls(target, endpoint, task_id)
                     if provider == "agnes"
@@ -816,6 +823,9 @@ async def generate_video(
                 max_download_mb = max(1, min(2048, int(target.extra.get("max_download_mb", 512))))
             except (TypeError, ValueError):
                 max_download_mb = 512
+            download_remaining = deadline - time.monotonic()
+            if download_remaining <= 0:
+                raise VideoGenerationError("视频任务全局超时已到。", stage="download")
             path = await _download_video(
                 client,
                 video_url,
@@ -823,6 +833,7 @@ async def generate_video(
                 output_dir=output_dir,
                 max_bytes=max_download_mb * 1024 * 1024,
                 use_urllib=provider == "agnes",
+                timeout=max(1, int(download_remaining)),
             )
             return VideoGenerateResult(
                 video_path=path,
