@@ -20,6 +20,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "global_timeout": 600,
         "poll_interval": 5,
         "max_download_mb": 512,
+        "max_saved_videos": 100,
     },
     "video_channels": [],
     "enabled_video_model_priority": [],

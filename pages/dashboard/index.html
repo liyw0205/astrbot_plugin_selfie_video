@@ -165,6 +165,7 @@
           <label>全局超时（秒）<input id="setting-timeout" type="number" min="30" max="1800"></label>
           <label>轮询间隔（秒）<input id="setting-poll" type="number" min="1" max="30"></label>
           <label>视频下载上限（MiB）<input id="setting-download" type="number" min="1" max="2048"></label>
+          <label>保留最近视频数<input id="setting-retention" type="number" min="1" max="10000"></label>
           <label class="check-row"><input id="setting-enabled" type="checkbox">启用视频生成</label>
           <label class="wide">模型优先级（每行填写 `渠道名/模型名`）<textarea id="setting-priority"></textarea></label>
           <label class="wide">允许使用的账号（逗号或换行分隔；留空允许所有账号）<textarea id="setting-usable-users"></textarea></label>
@@ -260,6 +261,7 @@
         $("#setting-timeout").value = video.global_timeout ?? 600;
         $("#setting-poll").value = video.poll_interval ?? 5;
         $("#setting-download").value = video.max_download_mb ?? 512;
+        $("#setting-retention").value = video.max_saved_videos ?? 100;
         $("#setting-enabled").checked = video.enable !== false;
         $("#setting-priority").value = (state.config.enabled_video_model_priority || []).join("\n");
         const permission = state.config.permission || {};
@@ -272,7 +274,8 @@
         for (const job of jobs) {
           const row = document.createElement("tr");
           const statusLabels = { queued: "排队中", running: "生成中", succeeded: "已完成", failed: "失败", cancelled: "已取消" };
-          const values = [job.id, statusLabels[job.status] || job.status, job.prompt, [job.channel_name, job.model].filter(Boolean).join(" / ") || "-", new Date(job.updated_at * 1000).toLocaleString()];
+          const statusLabel = job.status === "succeeded" && job.media_available === false ? "已完成（视频文件已清理）" : (statusLabels[job.status] || job.status);
+          const values = [job.id, statusLabel, job.prompt, [job.channel_name, job.model].filter(Boolean).join(" / ") || "-", new Date(job.updated_at * 1000).toLocaleString()];
           for (const [index, value] of values.entries()) {
             const cell = document.createElement("td"); cell.textContent = value || "-";
             if (index === 0) cell.className = "mono";
@@ -281,8 +284,12 @@
           }
           const actions = document.createElement("td"); actions.className = "actions";
           if (job.status === "succeeded") {
-            const play = document.createElement("button"); play.type = "button"; play.textContent = "播放"; play.addEventListener("click", () => playJob(job.id)); actions.append(play);
-            const download = document.createElement("button"); download.type = "button"; download.textContent = "下载"; download.addEventListener("click", () => downloadJob(job.id)); actions.append(document.createTextNode(" "), download);
+            if (job.media_available !== false) {
+              const play = document.createElement("button"); play.type = "button"; play.textContent = "播放"; play.addEventListener("click", () => playJob(job.id)); actions.append(play);
+              const download = document.createElement("button"); download.type = "button"; download.textContent = "下载"; download.addEventListener("click", () => downloadJob(job.id)); actions.append(document.createTextNode(" "), download);
+            } else {
+              actions.textContent = "视频文件已清理";
+            }
           } else if (job.status === "queued" || job.status === "running") {
             const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "取消"; cancel.addEventListener("click", () => cancelJob(job.id)); actions.append(cancel);
           } else if (job.status === "failed" || job.status === "cancelled") {
@@ -399,7 +406,8 @@
           user_cooldown_seconds: Number($("#setting-cooldown").value) || 0,
           global_timeout: Number($("#setting-timeout").value) || 600,
           poll_interval: Number($("#setting-poll").value) || 5,
-          max_download_mb: Number($("#setting-download").value) || 512
+          max_download_mb: Number($("#setting-download").value) || 512,
+          max_saved_videos: Number($("#setting-retention").value) || 100
         };
         state.config.enabled_video_model_priority = $("#setting-priority").value.split(/[\n,;]+/).map((item) => item.trim()).filter(Boolean);
         state.config.permission = {

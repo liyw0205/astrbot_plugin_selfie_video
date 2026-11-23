@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sqlite3
 import stat
 import sys
 import threading
@@ -171,6 +172,7 @@ def test_video_command_persists_request_and_delivers_generated_result(tmp_path, 
     plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
     plugin.replace_settings({
         "web": {"enable": False},
+        "video": {"max_saved_videos": 1},
         "video_channels": [{
             "name": "primary",
             "enabled": True,
@@ -180,7 +182,14 @@ def test_video_command_persists_request_and_delivers_generated_result(tmp_path, 
             "model": "agnes-video-2.0",
         }],
     })
-    video_path = tmp_path / "generated.mp4"
+    old_path = Path(plugin.video_dir) / "video_old.mp4"
+    old_path.write_bytes(b"old video")
+    plugin.store.create("OLD1", "previous-user", "old video")
+    assert plugin.store.update_if_status(
+        "OLD1", ["queued"], status="succeeded", video_path=str(old_path)
+    ) is True
+
+    video_path = Path(plugin.video_dir) / "generated.mp4"
     video_path.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 24)
     calls = []
 
@@ -224,6 +233,9 @@ def test_video_command_persists_request_and_delivers_generated_result(tmp_path, 
         assert row["status"] == "succeeded"
         assert row["channel_name"] == "primary"
         assert row["video_path"] == str(video_path)
+        assert not old_path.exists()
+        assert plugin.store.get("OLD1")["status"] == "succeeded"
+        assert plugin.store.get("OLD1")["video_path"] == ""
         assert calls[0][1].prompt == "a quiet lake"
         assert calls[0][1].duration == 7
         assert calls[0][1].size == "9:16"
@@ -628,6 +640,45 @@ def test_agnes_cancel_during_urllib_download_removes_partial_file(tmp_path, monk
             await runner.cleanup()
 
     asyncio.run(scenario())
+
+
+def test_video_retention_removes_old_mp4s_but_preserves_task_history(tmp_path, monkeypatch):
+    plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
+    plugin.replace_settings({
+        "web": {"enable": False},
+        "video": {"max_saved_videos": 2},
+    })
+    paths = []
+    for index in range(3):
+        path = Path(plugin.video_dir) / f"video_{index}.mp4"
+        path.write_bytes(b"video")
+        paths.append(str(path))
+        job_id = f"RET{index}"
+        plugin.store.create(job_id, "user", f"clip {index}")
+        assert plugin.store.update_if_status(
+            job_id, ["queued"], status="succeeded", video_path=str(path)
+        ) is True
+
+    with sqlite3.connect(plugin.store.path) as connection:
+        for index in range(3):
+            connection.execute(
+                "UPDATE video_jobs SET updated_at = ? WHERE id = ?",
+                (index + 1, f"RET{index}"),
+            )
+
+    async def initialize_without_web():
+        await plugin.initialize()
+        await plugin.terminate()
+
+    asyncio.run(initialize_without_web())
+
+    assert not Path(paths[0]).exists()
+    assert Path(paths[1]).exists()
+    assert Path(paths[2]).exists()
+    assert plugin.store.get("RET0")["status"] == "succeeded"
+    assert plugin.store.get("RET0")["video_path"] == ""
+    assert plugin.store.get("RET1")["video_path"] == paths[1]
+    assert plugin.store.get("RET2")["video_path"] == paths[2]
 
 
 def test_invalid_config_is_backed_up_before_defaults_are_written(tmp_path, monkeypatch):

@@ -45,3 +45,27 @@ def test_startup_migrates_existing_database_and_marks_interrupted_jobs(tmp_path)
     assert row["status"] == "failed"
     assert "状态未知" in row["error"]
     assert row["request_json"] == "{}"
+
+
+def test_video_retention_selects_old_success_paths_and_clears_conditionally(tmp_path):
+    store = VideoJobStore(str(tmp_path / "jobs.sqlite3"))
+    for index in range(3):
+        job_id = f"V{index}"
+        path = str(tmp_path / f"video-{index}.mp4")
+        store.create(job_id, "user", f"clip {index}")
+        assert store.update_if_status(
+            job_id, ["queued"], status="succeeded", video_path=path
+        ) is True
+
+    with sqlite3.connect(store.path) as connection:
+        for index in range(3):
+            connection.execute(
+                "UPDATE video_jobs SET updated_at = ? WHERE id = ?",
+                (index + 1, f"V{index}"),
+            )
+
+    stale = store.list_video_paths_to_prune(keep=1)
+    assert [row["id"] for row in stale] == ["V1", "V0"]
+    assert store.clear_video_path("V0", stale[-1]["video_path"]) is True
+    assert store.clear_video_path("V0", stale[-1]["video_path"]) is False
+    assert store.get("V0")["video_path"] == ""

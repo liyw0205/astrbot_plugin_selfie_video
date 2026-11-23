@@ -42,6 +42,19 @@ class VideoWebServer:
             return jsonify({"error": "需要有效的 Web Token。"}), 401
         return None
 
+    def _media_path(self, row: Dict[str, Any]) -> str:
+        raw_path = str(row.get("video_path") or "")
+        if not raw_path:
+            return ""
+        path = os.path.realpath(raw_path)
+        root = os.path.realpath(self.plugin.video_dir)
+        try:
+            if os.path.commonpath([root, path]) != root:
+                return ""
+        except ValueError:
+            return ""
+        return path if os.path.isfile(path) else ""
+
     @staticmethod
     def _masked_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         result = copy.deepcopy(settings)
@@ -206,6 +219,7 @@ class VideoWebServer:
                 offset=offset,
             )
             for row in rows:
+                row["media_available"] = bool(self._media_path(row))
                 row.pop("video_path", None)
                 row.pop("video_url", None)
                 row.pop("request_json", None)
@@ -241,13 +255,8 @@ class VideoWebServer:
             row = self.plugin.store.get(job_id)
             if not row or row.get("status") != "succeeded":
                 return jsonify({"error": "视频记录不存在。"}), 404
-            path = os.path.realpath(str(row.get("video_path") or ""))
-            root = os.path.realpath(self.plugin.video_dir)
-            try:
-                inside_root = os.path.commonpath([root, path]) == root
-            except ValueError:
-                inside_root = False
-            if not inside_root or not os.path.isfile(path):
+            path = self._media_path(row)
+            if not path:
                 return jsonify({"error": "视频文件不存在。"}), 404
             download = request.args.get("download") == "1"
             return send_file(

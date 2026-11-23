@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import shlex
+import sqlite3
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -227,6 +228,7 @@ class SelfieVideoPlugin(Star):
         self.config_path = os.path.join(self.data_dir, PLUGIN_CONFIG_FILENAME)
         self._config_lock = threading.RLock()
         self._submit_lock = threading.Lock()
+        self._video_prune_lock = threading.Lock()
         existing = _load_json(self.config_path)
         if not existing:
             existing = normalize_config({})
@@ -385,6 +387,7 @@ class SelfieVideoPlugin(Star):
 
     async def initialize(self) -> None:
         self._loop = asyncio.get_running_loop()
+        await asyncio.to_thread(self._prune_video_assets)
         web = self.settings.get("web", {})
         if not web.get("enable", True):
             return
@@ -463,6 +466,7 @@ class SelfieVideoPlugin(Star):
             )
             if completed:
                 await self._send_video(event, result.video_path, request.prompt)
+                self._prune_video_assets()
         except asyncio.CancelledError:
             self.store.update_if_status(
                 job_id, ["queued", "running"], status="cancelled", error="用户取消"
@@ -582,10 +586,36 @@ class SelfieVideoPlugin(Star):
         lines = []
         for row in rows:
             line = f"{row['id']}  {row['status']}  {row['prompt'][:45]}"
+            if row["status"] == "succeeded" and not row.get("video_path"):
+                line += "（视频文件已清理）"
             if row.get("error"):
                 line += f"\n  错误：{row['error'][:120]}"
             lines.append(line)
         yield event.plain_result("\n".join(lines))
+
+    def _prune_video_assets(self) -> None:
+        video = self.get_settings_snapshot().get("video", {})
+        keep = _bounded_int(video.get("max_saved_videos", 100), 100, 1, 10000)
+        root = os.path.realpath(self.video_dir)
+        with self._video_prune_lock:
+            try:
+                stale_rows = self.store.list_video_paths_to_prune(keep)
+            except sqlite3.Error:
+                logger.warning("无法读取视频保留记录；本次跳过文件清理。")
+                return
+            for row in stale_rows:
+                path = os.path.realpath(row["video_path"])
+                try:
+                    if os.path.commonpath([root, path]) != root:
+                        continue
+                except ValueError:
+                    continue
+                try:
+                    if os.path.isfile(path):
+                        os.remove(path)
+                    self.store.clear_video_path(row["id"], row["video_path"])
+                except (OSError, sqlite3.Error) as exc:
+                    logger.warning("视频保留清理失败（%s）；记录仍保留。", type(exc).__name__)
 
     async def terminate(self) -> None:
         if self._web_server:

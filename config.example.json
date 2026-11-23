@@ -7,7 +7,8 @@
     "user_cooldown_seconds": 5,
     "global_timeout": 600,
     "poll_interval": 5,
-    "max_download_mb": 512
+    "max_download_mb": 512,
+    "max_saved_videos": 100
   },
   "video_channels": [
     {

@@ -72,6 +72,7 @@ def test_config_api_requires_token_and_masks_secrets(tmp_path):
     response = client.get("/api/config", headers={"Authorization": "Bearer panel-secret"})
     assert response.status_code == 200
     body = response.get_json()
+    assert body["video"]["max_saved_videos"] == 100
     assert body["video_channels"][0]["has_api_key"] is True
     assert body["video_channels"][0]["api_key"] == ""
     assert "test-api-key" not in response.get_data(as_text=True)
@@ -155,6 +156,7 @@ def test_job_api_does_not_return_local_paths_or_source_urls(tmp_path):
     assert "/private/video.mp4" not in text
     assert "cdn.invalid" not in text
     assert "request_json" not in text
+    assert response.get_json()["jobs"][0]["media_available"] is False
 
 
 def test_job_actions_require_token_and_return_state(tmp_path):

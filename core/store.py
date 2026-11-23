@@ -145,6 +145,25 @@ class VideoJobStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_video_paths_to_prune(self, keep: int) -> List[Dict[str, str]]:
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, video_path FROM video_jobs "
+                "WHERE status = 'succeeded' AND video_path <> '' "
+                "ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT -1 OFFSET ?",
+                (max(1, min(10000, int(keep))),),
+            ).fetchall()
+        return [{"id": str(row["id"]), "video_path": str(row["video_path"])} for row in rows]
+
+    def clear_video_path(self, job_id: str, expected_path: str) -> bool:
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE video_jobs SET video_path = '' "
+                "WHERE id = ? AND status = 'succeeded' AND video_path = ?",
+                (str(job_id), str(expected_path)),
+            )
+        return cursor.rowcount == 1
+
     def list_jobs(
         self,
         *,
