@@ -7,7 +7,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_selfie_video import main as plugin_module
-from astrbot_plugin_selfie_video.generation.video import VideoGenerateRequest, VideoTarget
+from astrbot_plugin_selfie_video.generation.video import (
+    VideoGenerateRequest,
+    VideoGenerateResult,
+    VideoTarget,
+)
 
 
 def _target():
@@ -137,6 +141,73 @@ def test_queue_cap_and_per_user_cooldown_reject_excess_submissions(tmp_path, mon
         else:
             raise AssertionError("per-user cooldown should reject a rapid retry")
         plugin.cancel_job(second, owner_id="user-3")
+        await plugin.terminate()
+
+    asyncio.run(scenario())
+
+
+def test_video_command_persists_request_and_delivers_generated_result(tmp_path, monkeypatch):
+    plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
+    plugin.replace_settings({
+        "web": {"enable": False},
+        "video_channels": [{
+            "name": "primary",
+            "enabled": True,
+            "provider_type": "agnes",
+            "base_url": "https://agnes.example/v1",
+            "api_key": "key",
+            "model": "agnes-video-2.0",
+        }],
+    })
+    video_path = tmp_path / "generated.mp4"
+    video_path.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 24)
+    calls = []
+
+    async def generated(targets, request, *, output_dir):
+        calls.append((targets, request, output_dir))
+        return VideoGenerateResult(
+            video_path=str(video_path),
+            used_model="agnes-video-2.0",
+            channel_name="primary",
+            elapsed_seconds=2.5,
+        )
+
+    monkeypatch.setattr(plugin_module, "generate_video_with_fallback", generated)
+
+    class Event:
+        def __init__(self):
+            self.sent = []
+
+        def get_sender_id(self):
+            return "user-1"
+
+        def get_message_str(self):
+            return "/视频 a quiet lake --duration 7 --size 9:16"
+
+        def plain_result(self, text):
+            return text
+
+        def chain_result(self, chain):
+            return chain
+
+        async def send(self, message):
+            self.sent.append(message)
+
+    async def scenario():
+        event = Event()
+        accepted = [item async for item in plugin.cmd_video(event)]
+        assert "任务已受理" in accepted[0]
+        job_id = accepted[0].split("：", 1)[1].split("。", 1)[0]
+        await plugin._running[job_id]
+        row = plugin.store.get(job_id, owner_id="user-1")
+        assert row["status"] == "succeeded"
+        assert row["channel_name"] == "primary"
+        assert row["video_path"] == str(video_path)
+        assert calls[0][1].prompt == "a quiet lake"
+        assert calls[0][1].duration == 7
+        assert calls[0][1].size == "9:16"
+        assert any("视频生成完成" in item for item in event.sent)
+        assert any(str(video_path) in item for item in event.sent)
         await plugin.terminate()
 
     asyncio.run(scenario())
