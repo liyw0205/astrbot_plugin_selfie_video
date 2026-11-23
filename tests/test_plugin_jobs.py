@@ -1,4 +1,5 @@
 import asyncio
+import json
 import stat
 import sys
 import threading
@@ -211,3 +212,20 @@ def test_video_command_persists_request_and_delivers_generated_result(tmp_path, 
         await plugin.terminate()
 
     asyncio.run(scenario())
+
+
+def test_invalid_config_is_backed_up_before_defaults_are_written(tmp_path, monkeypatch):
+    data_dir = tmp_path / "plugin_data" / plugin_module.PLUGIN_NAME
+    data_dir.mkdir(parents=True)
+    config_path = data_dir / plugin_module.PLUGIN_CONFIG_FILENAME
+    config_path.write_text('{"video_channels": [broken', encoding="utf-8")
+    monkeypatch.setattr(plugin_module, "get_astrbot_data_path", lambda: str(tmp_path))
+
+    plugin = plugin_module.SelfieVideoPlugin(context=None, config={"web": {"enable": False}})
+
+    backups = list(data_dir.glob("*.corrupt.*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == '{"video_channels": [broken'
+    assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
+    assert json.loads(config_path.read_text(encoding="utf-8"))["video_channels"] == []
+    assert stat.S_IMODE(config_path.stat().st_mode) == 0o600

@@ -332,7 +332,7 @@
           const response = await fetch(`${state.apiBase.replace(/\/+$/, "")}/api/media/${encodeURIComponent(jobId)}?download=1`, { headers: { Authorization: `Bearer ${state.token}` } });
           if (!response.ok) throw new Error("读取视频失败。");
           const blob = await response.blob(); const url = URL.createObjectURL(blob);
-          const link = document.createElement("a"); link.href = url; link.download = `${jobId}.mp4`; link.click(); URL.revokeObjectURL(url);
+          const link = document.createElement("a"); link.href = url; link.download = `${jobId}.mp4`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
         } catch (error) { setMessage("#jobs-message", error.message, true); }
       };
       const cancelJob = async (jobId) => {
@@ -416,9 +416,9 @@
       $("#job-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadJobs().catch((error) => setMessage("#jobs-message", error.message, true)), 250); });
       $("#clear-job-filter").addEventListener("click", () => { $("#job-status").value = ""; $("#job-search").value = ""; loadJobs().catch((error) => setMessage("#jobs-message", error.message, true)); });
       document.querySelectorAll("[data-close]").forEach((button) => button.addEventListener("click", () => { $("#" + button.dataset.close).hidden = true; }));
-      $("#player-overlay").addEventListener("click", (event) => { if (event.target.id === "player-overlay") $("#player-overlay").hidden = true; });
-      $("#player-overlay").addEventListener("transitionend", () => {});
-      $("#player-overlay").querySelector("[data-close]").addEventListener("click", () => { $("#video-player").pause(); $("#video-player").removeAttribute("src"); if (state.playerUrl) URL.revokeObjectURL(state.playerUrl); state.playerUrl = ""; });
+      const closePlayer = () => { $("#video-player").pause(); $("#video-player").removeAttribute("src"); if (state.playerUrl) URL.revokeObjectURL(state.playerUrl); state.playerUrl = ""; $("#player-overlay").hidden = true; };
+      $("#player-overlay").addEventListener("click", (event) => { if (event.target.id === "player-overlay") closePlayer(); });
+      $("#player-overlay").querySelector("[data-close]").addEventListener("click", closePlayer);
       $("#api-base-input").value = state.apiBase;
       if (state.token) { $("#token-input").value = state.token; loadConfig().then(() => showApp(true)).catch(() => { sessionStorage.removeItem("selfie-video-token"); state.token = ""; }); }
       setInterval(() => { if (!$("#app-view").hidden) loadJobs().catch(() => {}); }, 15000);

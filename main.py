@@ -62,12 +62,23 @@ from .webui.server import VideoWebServer
 
 
 def _load_json(path: str) -> Dict[str, Any]:
+    def preserve_invalid_file() -> None:
+        backup_path = f"{path}.corrupt.{time.time_ns()}.bak"
+        os.replace(path, backup_path)
+        os.chmod(backup_path, 0o600)
+
     try:
         with open(path, "r", encoding="utf-8") as handle:
             value = json.load(handle)
-        return value if isinstance(value, dict) else {}
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return {}
+    except json.JSONDecodeError:
+        preserve_invalid_file()
+        return {}
+    if isinstance(value, dict):
+        return value
+    preserve_invalid_file()
+    return {}
 
 
 def _save_json(path: str, value: Dict[str, Any]) -> None:
