@@ -295,7 +295,7 @@ def test_agnes_official_create_poll_and_urllib_download(tmp_path):
 
     async def missing_primary(request):
         calls.append(("poll", request.query.get("video_id")))
-        return web.Response(status=404)
+        return web.Response(status=403)
 
     async def poll_legacy(request):
         calls.append(("legacy_poll", request.match_info["video_id"]))

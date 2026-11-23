@@ -597,6 +597,8 @@ async def _poll(
     last_error = ""
     while time.monotonic() < deadline:
         await asyncio.sleep(min(max(1, target.poll_interval), max(0.0, deadline - time.monotonic())))
+        fatal_error: Optional[VideoGenerationError] = None
+        received_response = False
         for url in urls:
             try:
                 data = await _request_json(
@@ -612,9 +614,12 @@ async def _poll(
             except VideoGenerationError as exc:
                 last_error = str(exc)
                 if exc.status_code in {400, 401, 403, 422}:
-                    raise
+                    if len(urls) == 1:
+                        raise
+                    fatal_error = fatal_error or exc
                 continue
 
+            received_response = True
             status = _extract_status(data)
             if status in {"FAILED", "FAIL", "FAILURE", "ERROR", "CANCELLED", "CANCELED"}:
                 raise VideoGenerationError(_redact(_extract_error(data), target), stage="poll")
@@ -623,6 +628,8 @@ async def _poll(
                 return video_url
             if status in {"SUCCEEDED", "SUCCESS", "COMPLETED", "COMPLETE", "DONE"}:
                 raise VideoGenerationError("任务已完成，但响应中没有视频地址。", stage="poll")
+        if fatal_error and not received_response:
+            raise fatal_error
     detail = f"：{last_error}" if last_error else ""
     raise VideoGenerationError(f"视频生成轮询超时{detail}", stage="poll")
 
