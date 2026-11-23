@@ -5,6 +5,8 @@ import sys
 import threading
 from pathlib import Path
 
+from aiohttp import web
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_selfie_video import main as plugin_module
@@ -210,6 +212,102 @@ def test_video_command_persists_request_and_delivers_generated_result(tmp_path, 
         assert any("视频生成完成" in item for item in event.sent)
         assert any(str(video_path) in item for item in event.sent)
         await plugin.terminate()
+
+    asyncio.run(scenario())
+
+
+def test_video_command_runs_agnes_http_flow_and_persists_sqlite_job(tmp_path, monkeypatch):
+    plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
+    calls = []
+    poll_count = 0
+    mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 24
+
+    async def create(request):
+        payload = await request.json()
+        calls.append(("create", request.path, request.headers.get("Authorization"), payload))
+        return web.json_response({"video_id": "agnes-e2e-1", "status": "processing"})
+
+    async def poll(request):
+        nonlocal poll_count
+        poll_count += 1
+        calls.append(("poll", request.query.get("video_id"), request.query.get("model_name")))
+        if poll_count == 1:
+            return web.json_response({"status": "processing"})
+        return web.json_response({
+            "status": "completed",
+            "metadata": {"url": f"http://{request.host}/result.mp4"},
+        })
+
+    async def download(request):
+        calls.append(("download", request.path))
+        return web.Response(body=mp4, content_type="video/mp4")
+
+    class Event:
+        def __init__(self):
+            self.sent = []
+
+        def get_sender_id(self):
+            return "user-e2e"
+
+        def get_message_str(self):
+            return "/视频 a test clip --duration 1 --size 9:16"
+
+        def plain_result(self, text):
+            return text
+
+        def chain_result(self, chain):
+            return chain
+
+        async def send(self, message):
+            self.sent.append(message)
+
+    async def scenario():
+        app = web.Application()
+        app.router.add_post("/v1/videos", create)
+        app.router.add_get("/agnesapi", poll)
+        app.router.add_get("/result.mp4", download)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        plugin.replace_settings({
+            "web": {"enable": False},
+            "video": {"global_timeout": 30, "poll_interval": 1},
+            "video_channels": [{
+                "name": "agnes-local",
+                "enabled": True,
+                "provider_type": "agnes",
+                "base_url": f"http://127.0.0.1:{port}/v1",
+                "api_key": "local-test-key",
+                "model": "agnes-video-2.0",
+                "poll_interval": 1,
+            }],
+        })
+        event = Event()
+        try:
+            accepted = [item async for item in plugin.cmd_video(event)]
+            assert "任务已受理" in accepted[0]
+            job_id = accepted[0].split("：", 1)[1].split("。", 1)[0]
+            await asyncio.wait_for(plugin._running[job_id], timeout=10)
+
+            row = plugin.store.get(job_id, owner_id="user-e2e")
+            assert row["status"] == "succeeded"
+            assert row["prompt"] == "a test clip"
+            assert row["channel_name"] == "agnes-local"
+            assert row["model"] == "agnes-video-2.0"
+            assert Path(row["video_path"]).read_bytes() == mp4
+            assert plugin_module.VideoJobStore(plugin.store.path).get(job_id)["status"] == "succeeded"
+            assert [call[0] for call in calls] == ["create", "poll", "poll", "download"]
+            assert calls[0][1:3] == ("/v1/videos", "Bearer local-test-key")
+            assert calls[0][3]["prompt"] == "a test clip"
+            assert calls[0][3]["num_frames"] == 25
+            assert calls[1][1:] == ("agnes-e2e-1", "agnes-video-2.0")
+            assert any("视频生成完成" in item for item in event.sent)
+            assert any("视频文件已保存" in item and row["video_path"] in item for item in event.sent)
+        finally:
+            await plugin.terminate()
+            await runner.cleanup()
 
     asyncio.run(scenario())
 
