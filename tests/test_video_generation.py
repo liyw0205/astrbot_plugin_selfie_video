@@ -195,9 +195,6 @@ def test_async_compatible_create_poll_download_and_secret_redaction(tmp_path):
         calls.append(("download", request.path))
         return web.Response(body=mp4, content_type="video/mp4")
 
-    async def missing_legacy(request):
-        return web.Response(status=404)
-
     async def run_success():
         app = web.Application()
         app.router.add_post("/v1/videos/generations", create)
@@ -291,10 +288,17 @@ def test_agnes_official_create_poll_and_urllib_download(tmp_path):
     async def create(request):
         body = await request.json()
         calls.append(("create", body))
-        return web.json_response({"video_id": "agnes-video-1", "status": "processing"})
+        return web.json_response({
+            "id": "legacy-task-1",
+            "data": {"video_id": "agnes-video-1", "status": "processing"},
+        })
 
-    async def poll(request):
+    async def missing_primary(request):
         calls.append(("poll", request.query.get("video_id")))
+        return web.Response(status=404)
+
+    async def poll_legacy(request):
+        calls.append(("legacy_poll", request.match_info["video_id"]))
         return web.json_response({"status": "completed", "metadata": {"url": f"http://{request.host}/agnes.mp4"}})
 
     async def download(request):
@@ -307,8 +311,8 @@ def test_agnes_official_create_poll_and_urllib_download(tmp_path):
     async def run_success():
         app = web.Application()
         app.router.add_post("/v1/videos", create)
-        app.router.add_get("/agnesapi", poll)
-        app.router.add_get("/v1/videos/{video_id}", missing_legacy)
+        app.router.add_get("/agnesapi", missing_primary)
+        app.router.add_get("/v1/videos/{video_id}", poll_legacy)
         app.router.add_get("/agnes.mp4", download)
         runner = web.AppRunner(app)
         await runner.setup()
@@ -324,7 +328,9 @@ def test_agnes_official_create_poll_and_urllib_download(tmp_path):
 
     result = _run(run_success())
     assert os.path.exists(result.video_path)
-    assert [name for name, _ in calls] == ["create", "poll", "download"]
+    assert [name for name, _ in calls] == ["create", "poll", "legacy_poll", "download"]
+    assert calls[1][1] == "agnes-video-1"
+    assert calls[2][1] == "legacy-task-1"
     assert calls[0][1]["num_frames"] == 25
 
 

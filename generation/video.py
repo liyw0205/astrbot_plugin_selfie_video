@@ -413,11 +413,22 @@ def _extract_video_url(value: Any) -> str:
 
 
 def _extract_task_id(value: Any, *, prefer_video_id: bool = False) -> str:
+    items = list(_walk_dicts(value))
     keys = ("video_id", "task_id", "request_id", "id")
     if prefer_video_id:
         keys = ("video_id", "task_id", "id", "request_id")
-    for item in _walk_dicts(value):
-        for key in keys:
+    for key in keys:
+        for item in items:
+            found = item.get(key)
+            if found is not None and str(found).strip():
+                return str(found).strip()
+    return ""
+
+
+def _extract_agnes_legacy_task_id(value: Any) -> str:
+    items = list(_walk_dicts(value))
+    for key in ("task_id", "request_id", "id"):
+        for item in items:
             found = item.get(key)
             if found is not None and str(found).strip():
                 return str(found).strip()
@@ -557,14 +568,20 @@ def _compatible_poll_url(endpoint: str, task_id: str, submission: Any) -> str:
     return f"{endpoint.rstrip('/')}/{encoded}"
 
 
-def _agnes_poll_urls(target: VideoTarget, endpoint: str, video_id: str) -> List[str]:
+def _agnes_poll_urls(
+    target: VideoTarget,
+    endpoint: str,
+    video_id: str,
+    legacy_task_id: str = "",
+) -> List[str]:
     parsed = urlparse(target.base_url if "://" in target.base_url else f"https://{target.base_url}")
     origin = f"{parsed.scheme or 'https'}://{parsed.netloc}"
     query = {"video_id": video_id}
     if target.model:
         query["model_name"] = target.model
     urls = [f"{origin}/agnesapi?{urlencode(query)}"]
-    urls.append(f"{endpoint.rstrip('/')}/{quote(video_id, safe='')}")
+    legacy_id = legacy_task_id or video_id
+    urls.append(f"{endpoint.rstrip('/')}/{quote(legacy_id, safe='')}")
     return list(dict.fromkeys(urls))
 
 
@@ -851,11 +868,13 @@ async def generate_video(
                         "上游未返回视频地址或任务号。",
                         stage="create",
                     )
-                poll_urls = (
-                    _agnes_poll_urls(target, endpoint, task_id)
-                    if provider == "agnes"
-                    else [_compatible_poll_url(endpoint, task_id, submission)]
-                )
+                if provider == "agnes":
+                    legacy_task_id = _extract_agnes_legacy_task_id(submission) or task_id
+                    poll_urls = _agnes_poll_urls(
+                        target, endpoint, task_id, legacy_task_id
+                    )
+                else:
+                    poll_urls = [_compatible_poll_url(endpoint, task_id, submission)]
                 video_url = await _poll(
                     client,
                     poll_urls,
