@@ -73,6 +73,37 @@ def test_agnes_payloads_follow_model_family_and_validate_local_reference():
     assert payload["extra_body"] == {"image": frames, "mode": "keyframes"}
 
 
+def test_agnes_v25_flash_limits_reference_inputs_and_rejects_video_reference():
+    flash = VideoTarget("a", "agnes", "https://example.test/v1", "k", "agnes-video-2.5-flash")
+    images = [f"https://cdn.example/image-{index}.png" for index in range(6)]
+    audios = [f"https://cdn.example/audio-{index}.mp3" for index in range(4)]
+
+    payload = build_create_payload(
+        flash,
+        VideoGenerateRequest(
+            "animate references",
+            duration=8,
+            size="1080P",
+            extra={"images": images, "audios": audios},
+        ),
+    )
+    assert payload["mode"] == "reference"
+    assert payload["size"] == "720P"
+    assert payload["seconds"] == "8"
+    assert payload["images"] == images[:5]
+    assert payload["audios"] == audios[:3]
+    assert "videos" not in payload
+
+    with pytest.raises(VideoGenerationError, match="不支持视频参考"):
+        build_create_payload(
+            flash,
+            VideoGenerateRequest(
+                "animate reference video",
+                extra={"videos": ["https://cdn.example/reference.mp4"]},
+            ),
+        )
+
+
 def test_compatible_payload_and_nested_response_extractors():
     target = VideoTarget("gw", "openai_video", "https://example.test/v1", "k", "rh-minimax-h3")
     payload = build_create_payload(target, VideoGenerateRequest("camera pans", duration=6, size="16:9"))
@@ -174,6 +205,67 @@ def test_async_compatible_create_poll_download_and_secret_redaction(tmp_path):
     assert os.path.exists(result.video_path)
     assert [name for name, _ in calls] == ["create", "poll", "poll", "download"]
     assert calls[0][1]["prompt"] == "a test clip"
+
+
+def test_compatible_list_submission_polls_api_tasks_route(tmp_path):
+    calls = []
+    poll_count = 0
+    mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 24
+
+    async def create(request):
+        calls.append(("create", request.path))
+        return web.json_response({"data": [{"task_id": "list-task-1", "status": "queued"}]})
+
+    async def poll(request):
+        nonlocal poll_count
+        poll_count += 1
+        calls.append(("poll", request.path))
+        if poll_count == 1:
+            return web.json_response({"data": {"status": "running"}})
+        return web.json_response({
+            "data": [{"task_status": "completed", "output": {"url": f"http://{request.host}/list.mp4"}}],
+        })
+
+    async def download(request):
+        calls.append(("download", request.path))
+        return web.Response(body=mp4, content_type="video/mp4")
+
+    async def run_success():
+        app = web.Application()
+        app.router.add_post("/v1/videos/generations", create)
+        app.router.add_get("/api/tasks/{task_id}", poll)
+        app.router.add_get("/list.mp4", download)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        target = VideoTarget(
+            "local",
+            "openai_video",
+            f"http://127.0.0.1:{port}/v1",
+            "test-secret",
+            "model",
+            timeout=10,
+            poll_interval=1,
+        )
+        try:
+            return await generate_video(
+                target,
+                VideoGenerateRequest("a list-shaped task"),
+                output_dir=str(tmp_path),
+            )
+        finally:
+            await runner.cleanup()
+
+    result = _run(run_success())
+    assert os.path.exists(result.video_path)
+    assert calls == [
+        ("create", "/v1/videos/generations"),
+        ("poll", "/api/tasks/list-task-1"),
+        ("poll", "/api/tasks/list-task-1"),
+        ("download", "/list.mp4"),
+    ]
 
 
 def test_agnes_official_create_poll_and_urllib_download(tmp_path):
