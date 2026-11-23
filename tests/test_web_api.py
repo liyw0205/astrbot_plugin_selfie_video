@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_selfie_video.core.config import normalize_config
+from astrbot_plugin_selfie_video import main as plugin_module
 from astrbot_plugin_selfie_video.webui.server import VideoWebServer
 
 
@@ -273,3 +274,30 @@ def test_backup_api_authenticates_listing_create_download_delete_and_restore(tmp
     assert uploaded.status_code == 202
     assert plugin.restore_request[1] is not None
     assert client.delete(f"/api/backups/{backup_id}", headers=headers).status_code == 200
+
+
+def test_backup_upload_route_prepares_real_plugin_restore_for_startup(tmp_path, monkeypatch):
+    monkeypatch.setattr(plugin_module, "get_astrbot_data_path", lambda: str(tmp_path))
+    config = {"web": {"enable": False, "token": "panel-secret"}}
+    plugin = plugin_module.SelfieVideoPlugin(context=None, config=config)
+    client = VideoWebServer(plugin).app.test_client()
+    headers = {"Authorization": "Bearer panel-secret"}
+
+    created = client.post("/api/backups", headers=headers, json={})
+    assert created.status_code == 201
+    backup_id = created.get_json()["backup"]["id"]
+    downloaded = client.get(f"/api/backups/{backup_id}/download", headers=headers)
+    assert downloaded.status_code == 200
+    upload = client.post(
+        "/api/backups/upload/restore",
+        headers=headers,
+        data={"file": (io.BytesIO(downloaded.data), "video-backup.zip")},
+        content_type="multipart/form-data",
+    )
+    assert upload.status_code == 202
+    assert plugin.video_backup.restore_pending is True
+
+    reloaded = plugin_module.SelfieVideoPlugin(context=None, config=config)
+
+    assert reloaded.video_backup.restore_pending is False
+    assert reloaded.store.list_all_recent() == []
