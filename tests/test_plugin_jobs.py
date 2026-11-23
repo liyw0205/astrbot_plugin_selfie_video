@@ -312,6 +312,191 @@ def test_video_command_runs_agnes_http_flow_and_persists_sqlite_job(tmp_path, mo
     asyncio.run(scenario())
 
 
+def test_video_command_runs_compatible_async_http_flow(tmp_path, monkeypatch):
+    plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
+    calls = []
+    poll_count = 0
+    mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 24
+
+    async def create(request):
+        payload = await request.json()
+        calls.append(("create", request.path, request.headers.get("Authorization"), payload))
+        return web.json_response({"id": "compatible-e2e-1", "status": "queued"})
+
+    async def poll(request):
+        nonlocal poll_count
+        poll_count += 1
+        calls.append(("poll", request.path))
+        if poll_count == 1:
+            return web.json_response({"status": "processing"})
+        return web.json_response({
+            "status": "completed",
+            "result": {"video_url": f"http://{request.host}/compatible.mp4"},
+        })
+
+    async def download(request):
+        calls.append(("download", request.path))
+        return web.Response(body=mp4, content_type="video/mp4")
+
+    class Event:
+        def __init__(self):
+            self.sent = []
+
+        def get_sender_id(self):
+            return "user-compatible-e2e"
+
+        def get_message_str(self):
+            return "/视频 a compatible test --duration 4 --size 16:9"
+
+        def plain_result(self, text):
+            return text
+
+        def chain_result(self, chain):
+            return chain
+
+        async def send(self, message):
+            self.sent.append(message)
+
+    async def scenario():
+        app = web.Application()
+        app.router.add_post("/v1/videos/generations", create)
+        app.router.add_get("/v1/videos/generations/{task_id}", poll)
+        app.router.add_get("/compatible.mp4", download)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        plugin.replace_settings({
+            "web": {"enable": False},
+            "video": {"global_timeout": 30, "poll_interval": 1},
+            "video_channels": [{
+                "name": "compatible-local",
+                "enabled": True,
+                "provider_type": "openai_video",
+                "base_url": f"http://127.0.0.1:{port}/v1",
+                "api_key": "local-compatible-key",
+                "model": "rh-minimax-h3",
+                "poll_interval": 1,
+            }],
+        })
+        event = Event()
+        try:
+            accepted = [item async for item in plugin.cmd_video(event)]
+            assert "任务已受理" in accepted[0]
+            job_id = accepted[0].split("：", 1)[1].split("。", 1)[0]
+            await asyncio.wait_for(plugin._running[job_id], timeout=10)
+
+            row = plugin.store.get(job_id, owner_id="user-compatible-e2e")
+            assert row["status"] == "succeeded"
+            assert row["prompt"] == "a compatible test"
+            assert row["channel_name"] == "compatible-local"
+            assert row["model"] == "rh-minimax-h3"
+            assert Path(row["video_path"]).read_bytes() == mp4
+            assert row["video_url"].endswith("/compatible.mp4")
+            assert [call[0] for call in calls] == ["create", "poll", "poll", "download"]
+            assert calls[0][1:3] == (
+                "/v1/videos/generations",
+                "Bearer local-compatible-key",
+            )
+            assert calls[0][3]["prompt"] == "a compatible test"
+            assert calls[0][3]["duration"] == 4
+            assert calls[0][3]["aspect_ratio"] == "16:9"
+            assert calls[1][1] == "/v1/videos/generations/compatible-e2e-1"
+            assert any("视频生成完成" in item for item in event.sent)
+            assert any("视频文件已保存" in item and row["video_path"] in item for item in event.sent)
+        finally:
+            await plugin.terminate()
+            await runner.cleanup()
+
+    asyncio.run(scenario())
+
+
+def test_video_command_cancels_compatible_poll_without_delivering_result(tmp_path, monkeypatch):
+    plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
+    calls = []
+    poll_entered = asyncio.Event()
+    release_poll = asyncio.Event()
+
+    async def create(request):
+        calls.append("create")
+        return web.json_response({"id": "compatible-cancel-1", "status": "queued"})
+
+    async def poll(request):
+        calls.append("poll")
+        poll_entered.set()
+        await release_poll.wait()
+        return web.json_response({"status": "processing"})
+
+    class Event:
+        def __init__(self):
+            self.sent = []
+
+        def get_sender_id(self):
+            return "user-cancel-e2e"
+
+        def get_message_str(self):
+            return "/视频 a cancellable test"
+
+        def plain_result(self, text):
+            return text
+
+        def chain_result(self, chain):
+            return chain
+
+        async def send(self, message):
+            self.sent.append(message)
+
+    async def scenario():
+        app = web.Application()
+        app.router.add_post("/v1/videos/generations", create)
+        app.router.add_get("/v1/videos/generations/{task_id}", poll)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        plugin.replace_settings({
+            "web": {"enable": False},
+            "video": {"global_timeout": 30, "poll_interval": 1},
+            "video_channels": [{
+                "name": "compatible-local",
+                "enabled": True,
+                "provider_type": "openai_video",
+                "base_url": f"http://127.0.0.1:{port}/v1",
+                "api_key": "local-compatible-key",
+                "model": "test-video-model",
+                "poll_interval": 1,
+            }],
+        })
+        event = Event()
+        try:
+            accepted = [item async for item in plugin.cmd_video(event)]
+            job_id = accepted[0].split("：", 1)[1].split("。", 1)[0]
+            task = plugin._running[job_id]
+            await asyncio.wait_for(poll_entered.wait(), timeout=5)
+
+            assert plugin.cancel_job(job_id, owner_id="user-cancel-e2e") is True
+            release_poll.set()
+            try:
+                await asyncio.wait_for(task, timeout=5)
+            except asyncio.CancelledError:
+                pass
+            else:
+                raise AssertionError("cancelled provider polling task should stop")
+
+            row = plugin.store.get(job_id, owner_id="user-cancel-e2e")
+            assert row["status"] == "cancelled"
+            assert calls == ["create", "poll"]
+            assert event.sent == []
+        finally:
+            release_poll.set()
+            await plugin.terminate()
+            await runner.cleanup()
+
+    asyncio.run(scenario())
+
+
 def test_invalid_config_is_backed_up_before_defaults_are_written(tmp_path, monkeypatch):
     data_dir = tmp_path / "plugin_data" / plugin_module.PLUGIN_NAME
     data_dir.mkdir(parents=True)
