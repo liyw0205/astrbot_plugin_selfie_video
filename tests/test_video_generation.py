@@ -43,12 +43,28 @@ def test_agnes_payloads_follow_model_family_and_validate_local_reference():
     assert payload["frame_rate"] == 24
     assert payload["width"] == 768
     assert payload["height"] == 1152
+    payload = build_create_payload(
+        v20,
+        VideoGenerateRequest("walk forward", extra={"num_inference_steps": 30}),
+    )
+    assert payload["num_inference_steps"] == 30
 
     v25 = VideoTarget("a", "agnes", "https://example.test/v1", "k", "agnes-video-2.5")
     payload = build_create_payload(v25, VideoGenerateRequest("walk forward", duration=20))
     assert payload["seconds"] == "12"
     assert payload["mode"] == "text"
     assert payload["size"] == "720P"
+
+    payload = build_create_payload(
+        v25,
+        VideoGenerateRequest(
+            "walk forward",
+            extra={"seed": 7, "negative_prompt": "blur", "num_inference_steps": 30},
+        ),
+    )
+    assert payload["seed"] == 7
+    assert payload["negative_prompt"] == "blur"
+    assert "num_inference_steps" not in payload
 
     v25_keyframe = VideoTarget("a", "agnes", "https://example.test/v1", "k", "agnes-video-2.5")
     payload = build_create_payload(

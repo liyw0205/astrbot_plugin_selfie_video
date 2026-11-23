@@ -299,7 +299,10 @@ def _agnes_payload(target: VideoTarget, request: VideoGenerateRequest) -> Dict[s
             payload.setdefault("mode", "keyframes")
         elif extra.get("mode"):
             payload["mode"] = str(extra["mode"])
-    for key in ("seed", "negative_prompt", "num_inference_steps"):
+    supported_options = ("seed", "negative_prompt")
+    if family == "v20":
+        supported_options += ("num_inference_steps",)
+    for key in supported_options:
         if extra.get(key) is not None:
             payload[key] = extra[key]
     return payload
