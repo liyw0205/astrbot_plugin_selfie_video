@@ -270,8 +270,11 @@ class VideoWebServer:
                 return jsonify({"error": "测试提示词不能为空。"}), 400
             if len(prompt) > 4000:
                 return jsonify({"error": "测试提示词不能超过 4000 个字符。"}), 400
+            settings = self.plugin.get_settings_snapshot()
+            if not settings.get("video", {}).get("enable", True):
+                return jsonify({"error": "视频生成当前已关闭。"}), 409
             target = next(
-                (item for item in build_video_targets(self.plugin.get_settings_snapshot())
+                (item for item in build_video_targets(settings)
                  if item.channel_name == channel_name and (not model or item.model == model)),
                 None,
             )

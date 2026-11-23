@@ -168,6 +168,20 @@ def test_web_test_endpoint_enqueues_instead_of_blocking_for_generation(tmp_path)
     assert targets[0].provider_type == "agnes"
 
 
+def test_web_test_endpoint_respects_global_video_disable_setting(tmp_path):
+    plugin = FakePlugin(tmp_path)
+    plugin.settings["video"]["enable"] = False
+    client = VideoWebServer(plugin).app.test_client()
+    response = client.post(
+        "/api/test",
+        headers={"Authorization": "Bearer panel-secret"},
+        json={"channel_name": "primary", "model": "agnes-video-2.0", "prompt": "a short clip", "duration": 5},
+    )
+    assert response.status_code == 409
+    assert response.get_json()["error"] == "视频生成当前已关闭。"
+    assert not hasattr(plugin, "submitted")
+
+
 def test_media_download_mode_is_authenticated_and_confined(tmp_path):
     plugin = FakePlugin(tmp_path)
     video = Path(tmp_path) / "clip.mp4"
