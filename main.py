@@ -466,7 +466,7 @@ class SelfieVideoPlugin(Star):
             )
             if completed:
                 await self._send_video(event, result.video_path, request.prompt)
-                self._prune_video_assets()
+                await asyncio.to_thread(self._prune_video_assets)
         except asyncio.CancelledError:
             self.store.update_if_status(
                 job_id, ["queued", "running"], status="cancelled", error="用户取消"

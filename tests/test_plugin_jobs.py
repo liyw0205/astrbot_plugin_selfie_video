@@ -246,6 +246,29 @@ def test_video_command_persists_request_and_delivers_generated_result(tmp_path, 
     asyncio.run(scenario())
 
 
+def test_successful_job_prunes_video_files_off_the_event_loop(tmp_path, monkeypatch):
+    plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
+    loop_progressed = threading.Event()
+
+    async def generated(*args, **kwargs):
+        return VideoGenerateResult(video_path="unused.mp4", used_model="m", channel_name="local")
+
+    def slow_prune():
+        assert loop_progressed.wait(timeout=1), "media pruning blocked the event loop"
+
+    monkeypatch.setattr(plugin_module, "generate_video_with_fallback", generated)
+    monkeypatch.setattr(plugin, "_prune_video_assets", slow_prune)
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        loop.call_soon(loop_progressed.set)
+        plugin.store.create("PRUNE1", "user", "clip")
+        await plugin._run_job("PRUNE1", "user", None, VideoGenerateRequest("clip"), [_target()])
+        assert plugin.store.get("PRUNE1")["status"] == "succeeded"
+
+    asyncio.run(scenario())
+
+
 def test_video_command_runs_agnes_http_flow_and_persists_sqlite_job(tmp_path, monkeypatch):
     plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
     calls = []
