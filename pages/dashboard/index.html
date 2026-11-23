@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Selfie Video 视频管理</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18201d;
+      --muted: #65706b;
+      --line: #d9dfdc;
+      --surface: #ffffff;
+      --ground: #f3f6f4;
+      --green: #247858;
+      --green-dark: #16563d;
+      --red: #a33d35;
+      --amber: #a65c12;
+      font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--ground); }
+    button, input, select, textarea { font: inherit; }
+    button { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); cursor: pointer; }
+    button:hover { border-color: #8ca69a; }
+    button.primary { background: var(--green); border-color: var(--green); color: white; }
+    button.primary:hover { background: var(--green-dark); }
+    button.danger { color: var(--red); }
+    button:disabled { cursor: wait; opacity: .65; }
+    input, select, textarea { width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; background: white; color: var(--ink); }
+    textarea { min-height: 84px; resize: vertical; }
+    label { display: grid; gap: 5px; color: #35423c; font-size: 13px; }
+    .shell { max-width: 1180px; margin: 0 auto; padding: 0 22px 36px; }
+    header { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); }
+    .brand { display: flex; align-items: baseline; gap: 10px; font-weight: 700; }
+    .brand small { color: var(--muted); font-weight: 400; }
+    .connection { color: var(--muted); font-size: 12px; }
+    nav { display: flex; gap: 4px; padding: 14px 0 0; border-bottom: 1px solid var(--line); }
+    nav button { min-height: 38px; border: 0; border-radius: 4px 4px 0 0; color: var(--muted); }
+    nav button[aria-selected="true"] { color: var(--green-dark); background: #e5efe9; font-weight: 650; }
+    main { padding-top: 20px; }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+    h1 { margin: 0; font-size: 22px; line-height: 1.25; }
+    h2 { margin: 0; font-size: 16px; }
+    p { margin: 5px 0 0; color: var(--muted); }
+    .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 5px; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th, td { padding: 11px 12px; border-bottom: 1px solid #e9eeeb; vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; background: #f8faf9; }
+    tr:last-child td { border-bottom: 0; }
+    td.actions { white-space: nowrap; text-align: right; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+    .muted { color: var(--muted); }
+    .status { display: inline-block; padding: 2px 7px; border-radius: 3px; background: #edf1ef; color: #47534d; white-space: nowrap; }
+    .status.succeeded { color: var(--green-dark); background: #e6f2eb; }
+    .status.failed, .status.cancelled { color: var(--red); background: #f7e9e7; }
+    .status.running { color: #80500f; background: #f8efdc; }
+    .empty { padding: 28px 14px; color: var(--muted); text-align: center; }
+    .settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; max-width: 900px; }
+    .settings-actions { margin-top: 16px; }
+    .hint { font-size: 12px; color: var(--muted); }
+    .message { min-height: 22px; margin-top: 10px; color: var(--muted); }
+    .message.error { color: var(--red); }
+    .overlay { position: fixed; inset: 0; display: grid; place-items: center; padding: 18px; background: #10171499; z-index: 5; }
+    .overlay[hidden], [hidden] { display: none !important; }
+    .dialog { width: min(660px, 100%); max-height: min(90vh, 840px); overflow: auto; padding: 20px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 18px 55px #10171433; }
+    .dialog-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+    .form-grid .wide { grid-column: 1 / -1; }
+    .check-row { display: flex; align-items: center; gap: 8px; min-height: 38px; }
+    .check-row input { width: 16px; min-height: 16px; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    .login { width: min(420px, calc(100% - 32px)); margin: 12vh auto 0; padding: 22px; background: white; border: 1px solid var(--line); border-radius: 5px; }
+    .login h1 { margin-bottom: 16px; }
+    .login form { display: grid; gap: 12px; }
+    video { width: 100%; max-height: 72vh; background: #111; }
+    .test-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(250px, 3fr) 100px auto; gap: 10px; align-items: end; margin-bottom: 14px; }
+    .job-filters { display: flex; align-items: end; gap: 10px; margin: 16px 0 10px; }
+    .job-filters label { min-width: 180px; }
+    .job-filters label.search { flex: 1; }
+    @media (max-width: 760px) {
+      .shell { padding: 0 14px 28px; }
+      header { min-height: 56px; }
+      .brand small, .connection { display: none; }
+      .settings-grid { grid-template-columns: 1fr 1fr; }
+      .test-row { grid-template-columns: 1fr 1fr; }
+      .test-row label:nth-child(2) { grid-column: 1 / -1; }
+      .test-row button { width: 100%; }
+      .job-filters { align-items: stretch; flex-direction: column; }
+      .job-filters label { min-width: 0; }
+      th, td { padding: 9px 8px; }
+    }
+    @media (max-width: 460px) {
+      .settings-grid, .form-grid { grid-template-columns: 1fr; }
+      .form-grid .wide { grid-column: auto; }
+      h1 { font-size: 19px; }
+      .toolbar > button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <section class="login" id="login-view">
+    <h1>Selfie Video</h1>
+    <form id="login-form">
+      <label>管理端地址<input id="api-base-input" type="url" autocomplete="url" required></label>
+      <label>管理 Token<input id="token-input" type="password" autocomplete="current-password" required></label>
+      <button class="primary" type="submit">连接管理面板</button>
+      <div class="message" id="login-message" role="status"></div>
+    </form>
+  </section>
+
+  <div class="shell" id="app-view" hidden>
+    <header>
+      <div class="brand">Selfie Video <small>视频生成管理</small></div>
+      <div class="connection" id="connection-state">已连接</div>
+      <button id="logout-button" type="button">退出</button>
+    </header>
+    <nav aria-label="主导航">
+      <button type="button" data-tab="channels" aria-selected="true">渠道与模型</button>
+      <button type="button" data-tab="jobs" aria-selected="false">任务与记录</button>
+      <button type="button" data-tab="settings" aria-selected="false">生成设置</button>
+    </nav>
+
+    <main>
+      <section id="panel-channels">
+        <div class="toolbar">
+          <div><h1>视频渠道</h1><p>协议显式选择；保存时留空密钥会保留当前值。</p></div>
+          <button class="primary" id="add-channel" type="button">添加渠道</button>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>名称</th><th>协议</th><th>Base URL</th><th>模型</th><th>密钥</th><th>状态</th><th></th></tr></thead>
+          <tbody id="channels-body"></tbody>
+        </table><div class="empty" id="channels-empty" hidden>还没有配置视频渠道。</div></div>
+        <div class="message" id="config-message" role="status"></div>
+      </section>
+
+      <section id="panel-jobs" hidden>
+        <div class="toolbar"><div><h1>生成任务与记录</h1><p>任务完成后可播放、下载或重新提交。</p></div><button id="refresh-jobs" type="button">刷新</button></div>
+        <div class="test-row">
+          <label>渠道 / 模型<select id="test-target"></select></label>
+          <label>测试提示词<input id="test-prompt" value="一段平稳的电影镜头，光线自然" maxlength="2000"></label>
+          <label>时长（秒）<input id="test-duration" type="number" min="1" max="60" value="5"></label>
+          <button class="primary" id="test-button" type="button">生成测试</button>
+        </div>
+        <p class="hint">测试会创建真实上游任务并可能计费。创建超时不会自动重提。</p>
+        <div class="job-filters">
+          <label>状态<select id="job-status"><option value="">全部状态</option><option value="queued">排队中</option><option value="running">生成中</option><option value="succeeded">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option></select></label>
+          <label class="search">搜索<input id="job-search" type="search" maxlength="160" placeholder="任务号、提示词、渠道或模型"></label>
+          <button id="clear-job-filter" type="button">清除筛选</button>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>任务号</th><th>状态</th><th>提示词</th><th>渠道 / 模型</th><th>更新时间</th><th></th></tr></thead>
+          <tbody id="jobs-body"></tbody>
+        </table><div class="empty" id="jobs-empty" hidden>还没有任务记录。</div></div>
+        <div class="message" id="jobs-message" role="status"></div>
+      </section>
+
+      <section id="panel-settings" hidden>
+        <div class="toolbar"><div><h1>生成默认值</h1><p>应用于聊天指令和 Web 测试。</p></div></div>
+        <div class="settings-grid">
+          <label>默认时长（秒）<input id="setting-duration" type="number" min="1" max="60"></label>
+          <label>并发任务数<input id="setting-concurrency" type="number" min="1" max="5"></label>
+          <label>全局超时（秒）<input id="setting-timeout" type="number" min="30" max="1800"></label>
+          <label>轮询间隔（秒）<input id="setting-poll" type="number" min="1" max="30"></label>
+          <label>视频下载上限（MiB）<input id="setting-download" type="number" min="1" max="2048"></label>
+          <label class="check-row"><input id="setting-enabled" type="checkbox">启用视频生成</label>
+          <label class="wide">模型优先级（每行填写 `渠道名/模型名`）<textarea id="setting-priority"></textarea></label>
+        </div>
+        <div class="settings-actions"><button class="primary" id="save-settings" type="button">保存设置</button><span class="message" id="settings-message" role="status"></span></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="overlay" id="channel-overlay" hidden>
+    <form class="dialog" id="channel-form">
+      <div class="dialog-head"><h2 id="channel-title">添加视频渠道</h2><button type="button" data-close="channel-overlay" aria-label="关闭">关闭</button></div>
+      <input type="hidden" id="channel-index" value="-1">
+      <div class="form-grid">
+        <label>渠道名称<input id="channel-name" required maxlength="80"></label>
+        <label>协议<select id="channel-provider"><option value="agnes">Agnes</option><option value="openai_video">OpenAI 兼容视频</option></select></label>
+        <label class="wide">Base URL<input id="channel-base" type="url" required placeholder="https://host.example/v1"></label>
+        <label class="wide">模型（多模型每行一个）<textarea id="channel-models" required placeholder="agnes-video-2.0"></textarea></label>
+        <label class="wide">逐模型协议覆盖（可选 JSON）<textarea id="channel-model-providers" placeholder='{"model-name":"agnes"}'></textarea></label>
+        <label class="wide">API Key（每行一个）<textarea id="channel-key" autocomplete="new-password" placeholder="新渠道填写；已有密钥留空表示保留"></textarea></label>
+        <label>代理 URL（可选）<input id="channel-proxy" type="url" placeholder="http://127.0.0.1:7890"></label>
+        <label>轮询间隔（秒）<input id="channel-poll" type="number" min="1" max="30" value="5"></label>
+        <label class="check-row"><input id="channel-enabled" type="checkbox" checked>启用渠道</label>
+      </div>
+      <div class="message" id="channel-message" role="status"></div>
+      <div class="dialog-actions"><button type="button" data-close="channel-overlay">取消</button><button class="primary" type="submit">保存渠道</button></div>
+    </form>
+  </div>
+  <div class="overlay" id="player-overlay" hidden>
+    <div class="dialog"><div class="dialog-head"><h2>视频结果</h2><button type="button" data-close="player-overlay">关闭</button></div><video id="video-player" controls playsinline></video></div>
+  </div>
+
+  <script>
+    (() => {
+      const $ = (selector) => document.querySelector(selector);
+      const state = { token: sessionStorage.getItem("selfie-video-token") || "", apiBase: sessionStorage.getItem("selfie-video-api-base") || window.location.origin, config: null, channels: [], playerUrl: "" };
+      const setMessage = (selector, text, error = false) => { const node = $(selector); node.textContent = text || ""; node.classList.toggle("error", Boolean(error)); };
+      const api = async (path, options = {}) => {
+        const base = state.apiBase.replace(/\/+$/, "");
+        const response = await fetch(`${base}${path}`, { ...options, headers: { "Content-Type": "application/json", Authorization: `Bearer ${state.token}`, ...(options.headers || {}) } });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        return data;
+      };
+      const modelsOf = (channel) => {
+        const value = channel.enabled_models || channel.models || channel.model || [];
+        return Array.isArray(value) ? value : String(value).split(/[\n,;]+/).map((part) => part.trim()).filter(Boolean);
+      };
+      const showApp = (visible) => { $("#login-view").hidden = visible; $("#app-view").hidden = !visible; };
+      const loadConfig = async () => {
+        const data = await api("/api/config");
+        state.config = data;
+        state.channels = data.video_channels || [];
+        renderChannels();
+        renderSettings();
+        await loadJobs();
+      };
+      const renderChannels = () => {
+        const body = $("#channels-body"); body.replaceChildren();
+        $("#channels-empty").hidden = state.channels.length > 0;
+        for (const [index, channel] of state.channels.entries()) {
+          const row = document.createElement("tr");
+          const values = [channel.name, channel.provider_type === "agnes" ? "Agnes" : "OpenAI 兼容", channel.base_url, modelsOf(channel).join(", "), channel.has_api_key ? "已配置" : "未配置", channel.enabled === false ? "停用" : "启用"];
+          for (const [column, value] of values.entries()) {
+            const cell = document.createElement("td"); cell.textContent = value || "-";
+            if (column === 2) cell.className = "mono";
+            if (column === 4) cell.className = channel.has_api_key ? "muted" : "status failed";
+            if (column === 5) { cell.className = "status"; if (channel.enabled !== false) cell.classList.add("succeeded"); }
+            row.append(cell);
+          }
+          const actions = document.createElement("td"); actions.className = "actions";
+          const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "编辑"; edit.addEventListener("click", () => openChannel(index));
+          const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "删除"; remove.className = "danger"; remove.addEventListener("click", () => removeChannel(index));
+          actions.append(edit, document.createTextNode(" "), remove); row.append(actions); body.append(row);
+        }
+        renderTestTargets();
+      };
+      const renderTestTargets = () => {
+        const select = $("#test-target"); select.replaceChildren();
+        for (const channel of state.channels.filter((item) => item.enabled !== false)) {
+          for (const model of modelsOf(channel)) {
+            const option = document.createElement("option"); option.value = `${channel.name}\n${model}`; option.textContent = `${channel.name} / ${model}`; select.append(option);
+          }
+        }
+      };
+      const renderSettings = () => {
+        const video = state.config.video || {};
+        $("#setting-duration").value = video.default_duration ?? 5;
+        $("#setting-concurrency").value = video.max_concurrent_tasks ?? 1;
+        $("#setting-timeout").value = video.global_timeout ?? 600;
+        $("#setting-poll").value = video.poll_interval ?? 5;
+        $("#setting-download").value = video.max_download_mb ?? 512;
+        $("#setting-enabled").checked = video.enable !== false;
+        $("#setting-priority").value = (state.config.enabled_video_model_priority || []).join("\n");
+      };
+      const renderJobs = (jobs) => {
+        const body = $("#jobs-body"); body.replaceChildren();
+        $("#jobs-empty").hidden = jobs.length > 0;
+        for (const job of jobs) {
+          const row = document.createElement("tr");
+          const statusLabels = { queued: "排队中", running: "生成中", succeeded: "已完成", failed: "失败", cancelled: "已取消" };
+          const values = [job.id, statusLabels[job.status] || job.status, job.prompt, [job.channel_name, job.model].filter(Boolean).join(" / ") || "-", new Date(job.updated_at * 1000).toLocaleString()];
+          for (const [index, value] of values.entries()) {
+            const cell = document.createElement("td"); cell.textContent = value || "-";
+            if (index === 0) cell.className = "mono";
+            if (index === 1) { cell.className = "status"; cell.classList.add(job.status); }
+            row.append(cell);
+          }
+          const actions = document.createElement("td"); actions.className = "actions";
+          if (job.status === "succeeded") {
+            const play = document.createElement("button"); play.type = "button"; play.textContent = "播放"; play.addEventListener("click", () => playJob(job.id)); actions.append(play);
+            const download = document.createElement("button"); download.type = "button"; download.textContent = "下载"; download.addEventListener("click", () => downloadJob(job.id)); actions.append(document.createTextNode(" "), download);
+          } else if (job.status === "queued" || job.status === "running") {
+            const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "取消"; cancel.addEventListener("click", () => cancelJob(job.id)); actions.append(cancel);
+          } else if (job.status === "failed" || job.status === "cancelled") {
+            const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "重试"; retry.addEventListener("click", () => retryJob(job.id)); actions.append(retry);
+          }
+          if (job.error) actions.title = job.error;
+          row.append(actions); body.append(row);
+        }
+      };
+      const loadJobs = async () => {
+        const query = new URLSearchParams();
+        if ($("#job-status").value) query.set("status", $("#job-status").value);
+        if ($("#job-search").value.trim()) query.set("q", $("#job-search").value.trim());
+        query.set("limit", "100");
+        const result = await api(`/api/jobs?${query.toString()}`); renderJobs(result.jobs || []);
+      };
+      const openChannel = (index = -1) => {
+        const channel = index >= 0 ? state.channels[index] : { name: "", provider_type: "agnes", base_url: "", enabled_models: [], enabled: true, has_api_key: false, poll_interval: 5 };
+        $("#channel-index").value = index;
+        $("#channel-title").textContent = index >= 0 ? "编辑视频渠道" : "添加视频渠道";
+        $("#channel-name").value = channel.name || "";
+        $("#channel-provider").value = channel.provider_type || "agnes";
+        $("#channel-base").value = channel.base_url || "";
+        $("#channel-models").value = modelsOf(channel).join("\n");
+        $("#channel-model-providers").value = channel.model_provider_types ? JSON.stringify(channel.model_provider_types, null, 2) : "";
+        $("#channel-key").value = "";
+        $("#channel-key").placeholder = channel.has_api_key ? "已配置密钥；留空保留，输入新值可轮换" : "新渠道需要填写 API Key";
+        $("#channel-proxy").value = channel.proxy || "";
+        $("#channel-poll").value = channel.poll_interval || 5;
+        $("#channel-enabled").checked = channel.enabled !== false;
+        setMessage("#channel-message", "");
+        $("#channel-overlay").hidden = false;
+        $("#channel-name").focus();
+      };
+      const removeChannel = async (index) => {
+        if (!confirm(`删除渠道“${state.channels[index].name}”？`)) return;
+        state.channels.splice(index, 1);
+        await saveConfig("#config-message");
+      };
+      const saveConfig = async (messageSelector) => {
+        const data = await api("/api/config", { method: "PUT", body: JSON.stringify({ video: state.config.video, video_channels: state.channels, enabled_video_model_priority: state.config.enabled_video_model_priority, permission: state.config.permission }) });
+        state.config = data.config; state.channels = data.config.video_channels || []; renderChannels(); renderSettings();
+        setMessage(messageSelector, "已保存。");
+      };
+      const playJob = async (jobId) => {
+        const response = await fetch(`${state.apiBase.replace(/\/+$/, "")}/api/media/${encodeURIComponent(jobId)}`, { headers: { Authorization: `Bearer ${state.token}` } });
+        if (!response.ok) { setMessage("#jobs-message", "读取视频失败。", true); return; }
+        const blob = await response.blob(); state.playerUrl = URL.createObjectURL(blob); $("#video-player").src = state.playerUrl; $("#player-overlay").hidden = false;
+      };
+      const downloadJob = async (jobId) => {
+        try {
+          const response = await fetch(`${state.apiBase.replace(/\/+$/, "")}/api/media/${encodeURIComponent(jobId)}?download=1`, { headers: { Authorization: `Bearer ${state.token}` } });
+          if (!response.ok) throw new Error("读取视频失败。");
+          const blob = await response.blob(); const url = URL.createObjectURL(blob);
+          const link = document.createElement("a"); link.href = url; link.download = `${jobId}.mp4`; link.click(); URL.revokeObjectURL(url);
+        } catch (error) { setMessage("#jobs-message", error.message, true); }
+      };
+      const cancelJob = async (jobId) => {
+        try { await api(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" }); setMessage("#jobs-message", `已请求取消任务 ${jobId}。`); await loadJobs(); }
+        catch (error) { setMessage("#jobs-message", error.message, true); }
+      };
+      const retryJob = async (jobId) => {
+        if (!confirm(`重新提交任务 ${jobId}？上游可能会再次计费。`)) return;
+        try { const result = await api(`/api/jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST" }); setMessage("#jobs-message", `已创建新任务 ${result.job_id}。`); await loadJobs(); }
+        catch (error) { setMessage("#jobs-message", error.message, true); }
+      };
+      $("#login-form").addEventListener("submit", async (event) => {
+        event.preventDefault(); state.token = $("#token-input").value.trim(); state.apiBase = $("#api-base-input").value.trim().replace(/\/+$/, "");
+        try { await loadConfig(); sessionStorage.setItem("selfie-video-token", state.token); sessionStorage.setItem("selfie-video-api-base", state.apiBase); showApp(true); setMessage("#login-message", ""); }
+        catch (error) { setMessage("#login-message", error.message, true); }
+      });
+      $("#logout-button").addEventListener("click", () => { sessionStorage.removeItem("selfie-video-token"); sessionStorage.removeItem("selfie-video-api-base"); state.token = ""; showApp(false); });
+      document.querySelectorAll("nav [data-tab]").forEach((button) => button.addEventListener("click", () => {
+        document.querySelectorAll("nav [data-tab]").forEach((item) => item.setAttribute("aria-selected", String(item === button)));
+        document.querySelectorAll("main > section").forEach((section) => { section.hidden = section.id !== `panel-${button.dataset.tab}`; });
+      }));
+      $("#add-channel").addEventListener("click", () => openChannel());
+      $("#channel-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const index = Number($("#channel-index").value);
+        const prior = index >= 0 ? state.channels[index] : {};
+        const apiKeys = $("#channel-key").value.split(/[\n\r,;]+/).map((item) => item.trim()).filter(Boolean);
+        if (index < 0 && !apiKeys.length) { setMessage("#channel-message", "新渠道必须填写 API Key。", true); return; }
+        let modelProviderTypes = {};
+        try {
+          modelProviderTypes = JSON.parse($("#channel-model-providers").value || "{}");
+          if (!modelProviderTypes || Array.isArray(modelProviderTypes) || typeof modelProviderTypes !== "object") throw new Error("格式不正确");
+          if (Object.values(modelProviderTypes).some((value) => !["agnes", "openai_video"].includes(value))) throw new Error("协议值只能为 agnes 或 openai_video");
+        } catch (error) { setMessage("#channel-message", `逐模型协议 JSON 无效：${error.message}`, true); return; }
+        const channel = {
+          ...prior,
+          name: $("#channel-name").value.trim(),
+          provider_type: $("#channel-provider").value,
+          base_url: $("#channel-base").value.trim(),
+          enabled_models: $("#channel-models").value.split(/[\n,;]+/).map((item) => item.trim()).filter(Boolean),
+          model_provider_types: modelProviderTypes,
+          api_key: apiKeys[0] || "",
+          api_keys: apiKeys,
+          proxy: $("#channel-proxy").value.trim(),
+          poll_interval: Number($("#channel-poll").value) || 5,
+          enabled: $("#channel-enabled").checked
+        };
+        if (index >= 0) state.channels[index] = channel; else state.channels.push(channel);
+        try { await saveConfig("#channel-message"); $("#channel-overlay").hidden = true; }
+        catch (error) { setMessage("#channel-message", error.message, true); }
+      });
+      $("#save-settings").addEventListener("click", async () => {
+        state.config.video = {
+          ...state.config.video,
+          enable: $("#setting-enabled").checked,
+          default_duration: Number($("#setting-duration").value) || 5,
+          max_concurrent_tasks: Number($("#setting-concurrency").value) || 1,
+          global_timeout: Number($("#setting-timeout").value) || 600,
+          poll_interval: Number($("#setting-poll").value) || 5,
+          max_download_mb: Number($("#setting-download").value) || 512
+        };
+        state.config.enabled_video_model_priority = $("#setting-priority").value.split(/[\n,;]+/).map((item) => item.trim()).filter(Boolean);
+        try { await saveConfig("#settings-message"); }
+        catch (error) { setMessage("#settings-message", error.message, true); }
+      });
+      $("#test-button").addEventListener("click", async () => {
+        const [channel_name, model] = $("#test-target").value.split("\n");
+        const prompt = $("#test-prompt").value.trim();
+        if (!channel_name || !prompt) { setMessage("#jobs-message", "请先选择渠道并填写提示词。", true); return; }
+        if (!confirm("这会向上游提交真实视频生成请求，可能产生费用。继续？")) return;
+        const button = $("#test-button"); button.disabled = true; button.textContent = "生成中…"; setMessage("#jobs-message", "请求已提交，等待完成…");
+        try { const result = await api("/api/test", { method: "POST", body: JSON.stringify({ channel_name, model, prompt, duration: Number($("#test-duration").value) || 5 }) }); setMessage("#jobs-message", `测试任务已受理：${result.job_id}。`); await loadJobs(); }
+        catch (error) { setMessage("#jobs-message", error.message, true); await loadJobs().catch(() => {}); }
+        finally { button.disabled = false; button.textContent = "生成测试"; }
+      });
+      $("#refresh-jobs").addEventListener("click", () => loadJobs().catch((error) => setMessage("#jobs-message", error.message, true)));
+      $("#job-status").addEventListener("change", () => loadJobs().catch((error) => setMessage("#jobs-message", error.message, true)));
+      let searchTimer;
+      $("#job-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => loadJobs().catch((error) => setMessage("#jobs-message", error.message, true)), 250); });
+      $("#clear-job-filter").addEventListener("click", () => { $("#job-status").value = ""; $("#job-search").value = ""; loadJobs().catch((error) => setMessage("#jobs-message", error.message, true)); });
+      document.querySelectorAll("[data-close]").forEach((button) => button.addEventListener("click", () => { $("#" + button.dataset.close).hidden = true; }));
+      $("#player-overlay").addEventListener("click", (event) => { if (event.target.id === "player-overlay") $("#player-overlay").hidden = true; });
+      $("#player-overlay").addEventListener("transitionend", () => {});
+      $("#player-overlay").querySelector("[data-close]").addEventListener("click", () => { $("#video-player").pause(); $("#video-player").removeAttribute("src"); if (state.playerUrl) URL.revokeObjectURL(state.playerUrl); state.playerUrl = ""; });
+      $("#api-base-input").value = state.apiBase;
+      if (state.token) { $("#token-input").value = state.token; loadConfig().then(() => showApp(true)).catch(() => { sessionStorage.removeItem("selfie-video-token"); state.token = ""; }); }
+      setInterval(() => { if (!$("#app-view").hidden) loadJobs().catch(() => {}); }, 15000);
+    })();
+  </script>
+</body>
+</html>

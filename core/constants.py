@@ -1,0 +1,5 @@
+PLUGIN_NAME = "astrbot_plugin_selfie_video"
+PLUGIN_DISPLAY_NAME = "Selfie Video 视频生成"
+PLUGIN_AUTHOR = "liyw0205"
+PLUGIN_VERSION = "0.1.0"
+PLUGIN_CONFIG_FILENAME = "selfie_video_config.json"

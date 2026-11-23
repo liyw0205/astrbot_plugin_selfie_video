@@ -1,0 +1,35 @@
+{
+  "video": {
+    "enable": true,
+    "default_duration": 5,
+    "max_concurrent_tasks": 1,
+    "global_timeout": 600,
+    "poll_interval": 5,
+    "max_download_mb": 512
+  },
+  "video_channels": [
+    {
+      "name": "agnes-primary",
+      "enabled": true,
+      "provider_type": "agnes",
+      "base_url": "https://api.example.com/v1",
+      "api_key": "replace-me",
+      "model": "agnes-video-2.0"
+    },
+    {
+      "name": "compatible-secondary",
+      "enabled": false,
+      "provider_type": "openai_video",
+      "base_url": "https://gateway.example.com/v1",
+      "api_key": "replace-me",
+      "model": "video-model"
+    }
+  ],
+  "enabled_video_model_priority": [
+    "agnes-primary/agnes-video-2.0"
+  ],
+  "permission": {
+    "usable_users": "",
+    "blocked_users": ""
+  }
+}

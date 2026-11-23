@@ -1,0 +1,29 @@
+{
+  "web": {
+    "description": "视频管理面板",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "启用独立 Web 管理面板",
+        "type": "bool",
+        "default": true
+      },
+      "host": {
+        "description": "监听地址",
+        "type": "string",
+        "default": "127.0.0.1"
+      },
+      "port": {
+        "description": "监听端口",
+        "type": "int",
+        "default": 14515
+      },
+      "token": {
+        "description": "Web 管理 Token",
+        "type": "string",
+        "hint": "默认 changeme 会在启动时替换为随机 Token；从本机插件配置文件读取，不会写入运行日志。",
+        "default": "changeme"
+      }
+    }
+  }
+}
