@@ -160,6 +160,8 @@
         <div class="settings-grid">
           <label>默认时长（秒）<input id="setting-duration" type="number" min="1" max="60"></label>
           <label>并发任务数<input id="setting-concurrency" type="number" min="1" max="5"></label>
+          <label>待处理任务上限<input id="setting-queue-limit" type="number" min="1" max="1000"></label>
+          <label>单用户提交间隔（秒）<input id="setting-cooldown" type="number" min="0" max="86400"></label>
           <label>全局超时（秒）<input id="setting-timeout" type="number" min="30" max="1800"></label>
           <label>轮询间隔（秒）<input id="setting-poll" type="number" min="1" max="30"></label>
           <label>视频下载上限（MiB）<input id="setting-download" type="number" min="1" max="2048"></label>
@@ -251,6 +253,8 @@
         const video = state.config.video || {};
         $("#setting-duration").value = video.default_duration ?? 5;
         $("#setting-concurrency").value = video.max_concurrent_tasks ?? 1;
+        $("#setting-queue-limit").value = video.max_pending_tasks ?? 20;
+        $("#setting-cooldown").value = video.user_cooldown_seconds ?? 5;
         $("#setting-timeout").value = video.global_timeout ?? 600;
         $("#setting-poll").value = video.poll_interval ?? 5;
         $("#setting-download").value = video.max_download_mb ?? 512;
@@ -386,6 +390,8 @@
           enable: $("#setting-enabled").checked,
           default_duration: Number($("#setting-duration").value) || 5,
           max_concurrent_tasks: Number($("#setting-concurrency").value) || 1,
+          max_pending_tasks: Number($("#setting-queue-limit").value) || 20,
+          user_cooldown_seconds: Number($("#setting-cooldown").value) || 0,
           global_timeout: Number($("#setting-timeout").value) || 600,
           poll_interval: Number($("#setting-poll").value) || 5,
           max_download_mb: Number($("#setting-download").value) || 512

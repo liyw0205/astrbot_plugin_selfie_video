@@ -10,6 +10,7 @@ import re
 import secrets
 import shlex
 import threading
+import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Dict, Optional, Tuple
 
@@ -214,6 +215,7 @@ class SelfieVideoPlugin(Star):
         self.plugin_root = os.path.dirname(os.path.abspath(__file__))
         self.config_path = os.path.join(self.data_dir, PLUGIN_CONFIG_FILENAME)
         self._config_lock = threading.RLock()
+        self._submit_lock = threading.Lock()
         existing = _load_json(self.config_path)
         if not existing:
             existing = normalize_config({})
@@ -278,32 +280,41 @@ class SelfieVideoPlugin(Star):
         targets: list,
         event: Any = None,
     ) -> str:
-        job_id = secrets.token_hex(6).upper()
-        self.store.create(job_id, owner_id, request.prompt, _request_data(request))
-        if targets:
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if current_loop is not None and (self._loop is None or not self._loop.is_running()):
+            self._loop = current_loop
+        loop = current_loop if current_loop is self._loop else self._loop
+        if loop is None or not loop.is_running():
+            raise RuntimeError("视频任务调度器尚未就绪，请稍后重试。")
+        if not targets:
+            raise ValueError("没有可用视频渠道，请先配置 video_channels。")
+
+        owner_id = str(owner_id)
+        video_settings = self.get_settings_snapshot().get("video", {})
+        max_pending = _bounded_int(video_settings.get("max_pending_tasks", 20), 20, 1, 1000)
+        cooldown = _bounded_int(video_settings.get("user_cooldown_seconds", 5), 5, 0, 86400)
+        with self._submit_lock:
+            if self.store.active_count() >= max_pending:
+                raise RuntimeError(f"视频任务队列已满（最多 {max_pending} 个待处理任务），请稍后重试。")
+            last_created = self.store.latest_created_at(owner_id)
+            remaining = cooldown - (time.time() - last_created) if last_created else 0
+            if remaining > 0:
+                raise RuntimeError(f"提交过于频繁，请在 {int(remaining) + 1} 秒后重试。")
+            job_id = secrets.token_hex(6).upper()
+            self.store.create(job_id, owner_id, request.prompt, _request_data(request))
             self.store.update(
                 job_id,
                 channel_name=targets[0].channel_name,
                 model=targets[0].model,
             )
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-        if current_loop is not None:
-            if self._loop is None or not self._loop.is_running():
-                self._loop = current_loop
-            if self._loop is current_loop:
-                self._start_job(job_id, str(owner_id), event, request, targets)
-                return job_id
-        loop = self._loop
-        if loop is None or not loop.is_running():
-            self.store.update_if_status(
-                job_id, ["queued"], status="failed", error="插件事件循环尚未就绪。"
-            )
-            raise RuntimeError("视频任务调度器尚未就绪，请稍后重试。")
+        if current_loop is loop:
+            self._start_job(job_id, owner_id, event, request, targets)
+            return job_id
         loop.call_soon_threadsafe(
-            self._start_job, job_id, str(owner_id), event, request, targets
+            self._start_job, job_id, owner_id, event, request, targets
         )
         return job_id
 

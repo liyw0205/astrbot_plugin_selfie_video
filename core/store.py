@@ -122,6 +122,21 @@ class VideoJobStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def active_count(self) -> int:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS total FROM video_jobs WHERE status IN ('queued', 'running')"
+            ).fetchone()
+        return int(row["total"] if row else 0)
+
+    def latest_created_at(self, owner_id: str) -> float:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT created_at FROM video_jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT 1",
+                (str(owner_id),),
+            ).fetchone()
+        return float(row["created_at"]) if row else 0.0
+
     def list_all_recent(self, limit: int = 50) -> List[Dict[str, Any]]:
         with self._lock, self._connect() as connection:
             rows = connection.execute(

@@ -15,6 +15,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "enable": True,
         "default_duration": 5,
         "max_concurrent_tasks": 1,
+        "max_pending_tasks": 20,
+        "user_cooldown_seconds": 5,
         "global_timeout": 600,
         "poll_interval": 5,
         "max_download_mb": 512,

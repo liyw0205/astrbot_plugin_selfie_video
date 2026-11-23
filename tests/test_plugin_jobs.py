@@ -96,3 +96,47 @@ def test_concurrency_setting_changes_wake_waiting_jobs(tmp_path, monkeypatch):
         await asyncio.gather(first, second)
 
     asyncio.run(scenario())
+
+
+def test_queue_cap_and_per_user_cooldown_reject_excess_submissions(tmp_path, monkeypatch):
+    plugin = _plugin(
+        tmp_path,
+        monkeypatch,
+        web={"enable": False},
+    )
+    plugin.replace_settings({"web": {"enable": False}, "video": {"max_pending_tasks": 1, "user_cooldown_seconds": 0}})
+
+    async def scenario():
+        plugin._loop = asyncio.get_running_loop()
+        blocked = asyncio.Event()
+
+        async def runner(*args):
+            await blocked.wait()
+
+        plugin._run_job = runner
+        first = plugin.submit_job("user-1", VideoGenerateRequest("clip"), [_target()])
+        try:
+            plugin.submit_job("user-2", VideoGenerateRequest("another"), [_target()])
+        except RuntimeError as exc:
+            assert "队列已满" in str(exc)
+        else:
+            raise AssertionError("queue cap should reject a second pending job")
+        assert plugin.cancel_job(first, owner_id="user-1") is True
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        plugin.replace_settings({
+            "web": {"enable": False},
+            "video": {"max_pending_tasks": 5, "user_cooldown_seconds": 60},
+        })
+        plugin._run_job = runner
+        second = plugin.submit_job("user-3", VideoGenerateRequest("clip"), [_target()])
+        try:
+            plugin.submit_job("user-3", VideoGenerateRequest("retry too soon"), [_target()])
+        except RuntimeError as exc:
+            assert "提交过于频繁" in str(exc)
+        else:
+            raise AssertionError("per-user cooldown should reject a rapid retry")
+        plugin.cancel_job(second, owner_id="user-3")
+        await plugin.terminate()
+
+    asyncio.run(scenario())
