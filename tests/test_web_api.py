@@ -1,4 +1,5 @@
 import copy
+import io
 import sys
 from pathlib import Path
 
@@ -45,6 +46,7 @@ class FakePlugin:
             }],
         })
         self.store = FakeStore()
+        self.video_backup = FakeVideoBackup()
 
     def get_settings_snapshot(self):
         return copy.deepcopy(self.settings)
@@ -63,6 +65,29 @@ class FakePlugin:
     def submit_job(self, owner_id, request, targets):
         self.submitted = (owner_id, request, targets)
         return "C3"
+
+    def prepare_video_backup_restore(self, *, backup_id="", upload=None):
+        self.restore_request = (backup_id, upload)
+        return {"restart_required": True, "media_count": 1}
+
+
+class FakeVideoBackup:
+    restore_pending = False
+
+    def list_backups(self):
+        return [{"id": "a" * 32, "size": 2048, "created_at": 1700000000}]
+
+    def create_backup(self):
+        return {"id": "b" * 32, "size": 2048, "created_at": 1700000001, "media_count": 1}
+
+    def backup_path(self, backup_id):
+        if backup_id != "a" * 32:
+            raise ValueError("备份不存在")
+        return Path(__file__)
+
+    def delete_backup(self, backup_id):
+        if backup_id != "a" * 32:
+            raise ValueError("备份不存在")
 
 
 def test_config_api_requires_token_and_masks_secrets(tmp_path):
@@ -216,3 +241,35 @@ def test_media_download_mode_is_authenticated_and_confined(tmp_path):
     response = client.get(url, headers={"Authorization": "Bearer panel-secret"})
     assert response.status_code == 200
     assert response.headers["Content-Disposition"].startswith("attachment;")
+
+
+def test_backup_api_authenticates_listing_create_download_delete_and_restore(tmp_path):
+    plugin = FakePlugin(tmp_path)
+    client = VideoWebServer(plugin).app.test_client()
+    backup_id = "a" * 32
+    assert client.get("/api/backups").status_code == 401
+    assert client.post("/api/backups").status_code == 401
+    assert client.post(f"/api/backups/{backup_id}/restore").status_code == 401
+
+    headers = {"Authorization": "Bearer panel-secret"}
+    listing = client.get("/api/backups", headers=headers)
+    assert listing.get_json()["items"][0]["id"] == backup_id
+    created = client.post("/api/backups", headers=headers, json={})
+    assert created.status_code == 201
+    assert created.get_json()["backup"]["media_count"] == 1
+    downloaded = client.get(f"/api/backups/{backup_id}/download", headers=headers)
+    assert downloaded.status_code == 200
+    assert downloaded.mimetype == "application/zip"
+    restored = client.post(f"/api/backups/{backup_id}/restore", headers=headers)
+    assert restored.status_code == 202
+    assert restored.get_json()["restore"]["restart_required"] is True
+    assert plugin.restore_request[0] == backup_id
+    uploaded = client.post(
+        "/api/backups/upload/restore",
+        headers=headers,
+        data={"file": (io.BytesIO(b"zip"), "backup.zip")},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 202
+    assert plugin.restore_request[1] is not None
+    assert client.delete(f"/api/backups/{backup_id}", headers=headers).status_code == 200

@@ -78,6 +78,8 @@
     .job-filters { display: flex; align-items: end; gap: 10px; margin: 16px 0 10px; }
     .job-filters label { min-width: 180px; }
     .job-filters label.search { flex: 1; }
+    .backup-upload { display: grid; grid-template-columns: minmax(220px, 1fr) auto minmax(220px, 2fr); gap: 10px; align-items: end; margin: 16px 0; }
+    .backup-upload input[type="file"] { padding: 5px; }
     @media (max-width: 760px) {
       .shell { padding: 0 14px 28px; }
       header { min-height: 56px; }
@@ -88,6 +90,8 @@
       .test-row button { width: 100%; }
       .job-filters { align-items: stretch; flex-direction: column; }
       .job-filters label { min-width: 0; }
+      .backup-upload { grid-template-columns: 1fr auto; }
+      .backup-upload .message { grid-column: 1 / -1; }
       th, td { padding: 9px 8px; }
     }
     @media (max-width: 460px) {
@@ -119,6 +123,7 @@
       <button type="button" data-tab="channels" aria-selected="true">渠道与模型</button>
       <button type="button" data-tab="jobs" aria-selected="false">任务与记录</button>
       <button type="button" data-tab="settings" aria-selected="false">生成设置</button>
+      <button type="button" data-tab="backups" aria-selected="false">备份</button>
     </nav>
 
     <main>
@@ -173,6 +178,23 @@
         </div>
         <div class="settings-actions"><button class="primary" id="save-settings" type="button">保存设置</button><span class="message" id="settings-message" role="status"></span></div>
       </section>
+
+      <section id="panel-backups" hidden>
+        <div class="toolbar">
+          <div><h1>视频数据备份</h1><p>包含任务记录与关联 MP4，不含插件配置和密钥。恢复会在插件启动时替换这些数据，需重启生效。</p></div>
+          <button class="primary" id="create-backup" type="button">创建备份</button>
+        </div>
+        <div class="backup-upload">
+          <label>从 ZIP 恢复<input id="backup-file" type="file" accept=".zip,application/zip"></label>
+          <button id="restore-upload" type="button">准备恢复</button>
+          <span id="restore-state" class="message" role="status"></span>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>备份编号</th><th>创建时间</th><th>大小</th><th></th></tr></thead>
+          <tbody id="backups-body"></tbody>
+        </table><div class="empty" id="backups-empty" hidden>还没有视频数据备份。</div></div>
+        <div class="message" id="backups-message" role="status"></div>
+      </section>
     </main>
   </div>
 
@@ -202,7 +224,7 @@
   <script>
     (() => {
       const $ = (selector) => document.querySelector(selector);
-      const state = { token: sessionStorage.getItem("selfie-video-token") || "", apiBase: sessionStorage.getItem("selfie-video-api-base") || window.location.origin, config: null, channels: [], playerUrl: "" };
+      const state = { token: sessionStorage.getItem("selfie-video-token") || "", apiBase: sessionStorage.getItem("selfie-video-api-base") || window.location.origin, config: null, channels: [], playerUrl: "", restorePending: false };
       const setMessage = (selector, text, error = false) => { const node = $(selector); node.textContent = text || ""; node.classList.toggle("error", Boolean(error)); };
       const api = async (path, options = {}) => {
         const base = state.apiBase.replace(/\/+$/, "");
@@ -223,6 +245,7 @@
         renderChannels();
         renderSettings();
         await loadJobs();
+        await loadBackups();
       };
       const renderChannels = () => {
         const body = $("#channels-body"); body.replaceChildren();
@@ -305,6 +328,50 @@
         if ($("#job-search").value.trim()) query.set("q", $("#job-search").value.trim());
         query.set("limit", "100");
         const result = await api(`/api/jobs?${query.toString()}`); renderJobs(result.jobs || []);
+      };
+      const formatBytes = (value) => {
+        const size = Number(value) || 0;
+        if (size < 1024 * 1024) return `${Math.ceil(size / 1024)} KiB`;
+        return `${(size / (1024 * 1024)).toFixed(1)} MiB`;
+      };
+      const loadBackups = async () => {
+        const result = await api("/api/backups");
+        state.restorePending = result.restore_pending === true;
+        const body = $("#backups-body"); body.replaceChildren();
+        $("#backups-empty").hidden = (result.items || []).length > 0;
+        $("#create-backup").disabled = state.restorePending;
+        $("#restore-upload").disabled = state.restorePending;
+        $("#restore-state").textContent = state.restorePending ? "恢复已准备，重启插件后生效；新任务已暂停。" : "";
+        for (const backup of result.items || []) {
+          const row = document.createElement("tr");
+          const id = document.createElement("td"); id.className = "mono"; id.textContent = backup.id;
+          const created = document.createElement("td"); created.textContent = new Date(backup.created_at * 1000).toLocaleString();
+          const size = document.createElement("td"); size.textContent = formatBytes(backup.size);
+          const actions = document.createElement("td"); actions.className = "actions";
+          const download = document.createElement("button"); download.type = "button"; download.textContent = "下载"; download.addEventListener("click", () => downloadBackup(backup.id));
+          const restore = document.createElement("button"); restore.type = "button"; restore.textContent = "恢复"; restore.disabled = state.restorePending; restore.addEventListener("click", () => restoreBackup(backup.id));
+          const remove = document.createElement("button"); remove.type = "button"; remove.className = "danger"; remove.textContent = "删除"; remove.addEventListener("click", () => deleteBackup(backup.id));
+          actions.append(download, document.createTextNode(" "), restore, document.createTextNode(" "), remove);
+          row.append(id, created, size, actions); body.append(row);
+        }
+      };
+      const downloadBackup = async (backupId) => {
+        try {
+          const response = await fetch(`${state.apiBase.replace(/\/+$/, "")}/api/backups/${encodeURIComponent(backupId)}/download`, { headers: { Authorization: `Bearer ${state.token}` } });
+          if (!response.ok) throw new Error("下载备份失败。");
+          const blob = await response.blob(); const url = URL.createObjectURL(blob);
+          const link = document.createElement("a"); link.href = url; link.download = `video-data-${backupId}.zip`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (error) { setMessage("#backups-message", error.message, true); }
+      };
+      const restoreBackup = async (backupId) => {
+        if (!confirm(`从备份 ${backupId} 替换当前任务记录和视频文件？插件必须重启后才会应用。`)) return;
+        try { await api(`/api/backups/${encodeURIComponent(backupId)}/restore`, { method: "POST" }); setMessage("#backups-message", "恢复已准备；重启插件后生效。"); await loadBackups(); }
+        catch (error) { setMessage("#backups-message", error.message, true); }
+      };
+      const deleteBackup = async (backupId) => {
+        if (!confirm(`删除备份 ${backupId}？`)) return;
+        try { await api(`/api/backups/${encodeURIComponent(backupId)}`, { method: "DELETE" }); setMessage("#backups-message", "备份已删除。"); await loadBackups(); }
+        catch (error) { setMessage("#backups-message", error.message, true); }
       };
       const openChannel = (index = -1) => {
         const channel = index >= 0 ? state.channels[index] : { name: "", provider_type: "agnes", base_url: "", enabled_models: [], enabled: true, has_api_key: false, poll_interval: 5 };
@@ -417,6 +484,25 @@
         };
         try { await saveConfig("#settings-message"); }
         catch (error) { setMessage("#settings-message", error.message, true); }
+      });
+      $("#create-backup").addEventListener("click", async () => {
+        if (!confirm("创建包含任务记录与关联视频文件的本地 ZIP 备份？")) return;
+        const button = $("#create-backup"); button.disabled = true;
+        try { const result = await api("/api/backups", { method: "POST", body: "{}" }); setMessage("#backups-message", `备份已创建：${result.backup.id}`); await loadBackups(); }
+        catch (error) { setMessage("#backups-message", error.message, true); }
+        finally { button.disabled = state.restorePending; }
+      });
+      $("#restore-upload").addEventListener("click", async () => {
+        const file = $("#backup-file").files[0];
+        if (!file) { setMessage("#backups-message", "请选择 ZIP 备份文件。", true); return; }
+        if (!confirm(`从“${file.name}”替换当前任务记录和视频文件？插件必须重启后才会应用。`)) return;
+        const form = new FormData(); form.append("file", file);
+        try {
+          const response = await fetch(`${state.apiBase.replace(/\/+$/, "")}/api/backups/upload/restore`, { method: "POST", headers: { Authorization: `Bearer ${state.token}` }, body: form });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+          setMessage("#backups-message", "恢复已准备；重启插件后生效。"); await loadBackups();
+        } catch (error) { setMessage("#backups-message", error.message, true); }
       });
       $("#test-button").addEventListener("click", async () => {
         const [channel_name, model] = $("#test-target").value.split("\n");

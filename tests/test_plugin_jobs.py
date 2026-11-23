@@ -704,6 +704,59 @@ def test_video_retention_removes_old_mp4s_but_preserves_task_history(tmp_path, m
     assert plugin.store.get("RET2")["video_path"] == paths[2]
 
 
+def test_plugin_applies_pending_video_backup_before_opening_job_store(tmp_path, monkeypatch):
+    plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
+    video_dir = Path(plugin.video_dir)
+    (video_dir / "video_REST1.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 24)
+    plugin.store.create("REST1", "user", "restored clip")
+    assert plugin.store.update_if_status(
+        "REST1", ["queued"], status="succeeded", video_path=str(video_dir / "video_REST1.mp4")
+    )
+    backup = plugin.video_backup.create_backup()
+    plugin.store.create("LATER1", "user", "later clip")
+    assert plugin.store.update_if_status("LATER1", ["queued"], status="failed", error="test")
+    (video_dir / "later.mp4").write_bytes(b"later")
+    plugin.prepare_video_backup_restore(backup_id=backup["id"])
+
+    reloaded = _plugin(tmp_path, monkeypatch, web={"enable": False})
+
+    assert reloaded.video_backup.restore_pending is False
+    assert reloaded.store.get("REST1")["video_path"] == str(video_dir / "REST1.mp4")
+    assert reloaded.store.get("LATER1") is None
+    assert (video_dir / "REST1.mp4").is_file()
+    assert not (video_dir / "later.mp4").exists()
+
+
+def test_prepared_restore_blocks_new_video_submissions(tmp_path, monkeypatch):
+    plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
+    backup = plugin.video_backup.create_backup()
+    plugin.prepare_video_backup_restore(backup_id=backup["id"])
+
+    async def scenario():
+        plugin._loop = asyncio.get_running_loop()
+        try:
+            plugin.submit_job("user", VideoGenerateRequest("clip"), [_target()])
+        except RuntimeError as exc:
+            assert "恢复已准备" in str(exc)
+        else:
+            raise AssertionError("new jobs must stop while a restore awaits restart")
+
+    asyncio.run(scenario())
+    assert plugin.store.active_count() == 0
+
+
+def test_video_backup_restore_is_rejected_while_jobs_are_active(tmp_path, monkeypatch):
+    plugin = _plugin(tmp_path, monkeypatch, web={"enable": False})
+    plugin.store.create("ACTIVE1", "user", "still running")
+    try:
+        plugin.prepare_video_backup_restore(backup_id="0" * 32)
+    except ValueError as exc:
+        assert "等待视频生成任务完成" in str(exc)
+    else:
+        raise AssertionError("restore preparation must reject active jobs")
+    assert plugin.video_backup.restore_pending is False
+
+
 def test_invalid_config_is_backed_up_before_defaults_are_written(tmp_path, monkeypatch):
     data_dir = tmp_path / "plugin_data" / plugin_module.PLUGIN_NAME
     data_dir.mkdir(parents=True)

@@ -45,6 +45,7 @@ except Exception:
         return os.path.join(os.getcwd(), "data")
 
 from .core.config import build_video_targets, config_to_dict, normalize_config
+from .core.backup import VideoBackupError, VideoBackupManager
 from .core.constants import (
     PLUGIN_AUTHOR,
     PLUGIN_CONFIG_FILENAME,
@@ -243,6 +244,12 @@ class SelfieVideoPlugin(Star):
             ):
                 existing["web"]["token"] = saved_web["token"]
         self.settings = normalize_config(existing)
+        self.video_backup = VideoBackupManager(
+            self.data_dir,
+            self.video_dir,
+            os.path.join(self.data_dir, "video_jobs.sqlite3"),
+        )
+        self.video_backup.apply_pending_restore()
         self.store = VideoJobStore(os.path.join(self.data_dir, "video_jobs.sqlite3"))
         self.store.recover_interrupted()
         self._slot_condition = asyncio.Condition()
@@ -316,6 +323,8 @@ class SelfieVideoPlugin(Star):
         max_pending = _bounded_int(video_settings.get("max_pending_tasks", 20), 20, 1, 1000)
         cooldown = _bounded_int(video_settings.get("user_cooldown_seconds", 5), 5, 0, 86400)
         with self._submit_lock:
+            if self.video_backup.restore_pending:
+                raise RuntimeError("视频数据恢复已准备，请重启插件后继续生成任务。")
             if self.store.active_count() >= max_pending:
                 raise RuntimeError(f"视频任务队列已满（最多 {max_pending} 个待处理任务），请稍后重试。")
             last_created = self.store.latest_created_at(owner_id)
@@ -336,6 +345,17 @@ class SelfieVideoPlugin(Star):
             self._start_job, job_id, owner_id, event, request, targets
         )
         return job_id
+
+    def prepare_video_backup_restore(self, *, backup_id: str = "", upload: Any = None) -> Dict[str, Any]:
+        with self._submit_lock:
+            if self.video_backup.restore_pending:
+                raise VideoBackupError("已有待应用的恢复，请重启插件")
+            if self.store.active_count():
+                raise VideoBackupError("请等待视频生成任务完成后再准备恢复")
+            with self._video_prune_lock:
+                if upload is not None:
+                    return self.video_backup.prepare_restore_upload(upload)
+                return self.video_backup.prepare_restore(backup_id)
 
     def _start_job(
         self,

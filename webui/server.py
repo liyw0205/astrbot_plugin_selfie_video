@@ -6,6 +6,7 @@ import copy
 import hashlib
 import hmac
 import os
+import sqlite3
 import threading
 from typing import Any, Dict
 from urllib.parse import urlsplit
@@ -13,6 +14,7 @@ from urllib.parse import urlsplit
 from flask import Flask, jsonify, request, send_file
 from werkzeug.serving import BaseWSGIServer, make_server
 
+from ..core.backup import MAX_ARCHIVE_BYTES, VideoBackupError
 from ..core.config import build_video_targets, normalize_config
 from ..generation.video import VideoGenerateRequest, normalize_video_provider_type
 
@@ -21,6 +23,7 @@ class VideoWebServer:
     def __init__(self, plugin: Any) -> None:
         self.plugin = plugin
         self.app = Flask(__name__)
+        self.app.config["MAX_CONTENT_LENGTH"] = MAX_ARCHIVE_BYTES + 1024 * 1024
         self._server: BaseWSGIServer | None = None
         self._thread: threading.Thread | None = None
         self._register_routes()
@@ -161,6 +164,10 @@ class VideoWebServer:
                 response.headers["Vary"] = "Origin"
             return response
 
+        @self.app.errorhandler(413)
+        def request_too_large(_error):
+            return jsonify({"error": "上传备份超过 2 GiB 限制。"}), 413
+
         @self.app.get("/")
         def index():
             path = os.path.join(self.plugin.plugin_root, "pages", "dashboard", "index.html")
@@ -265,6 +272,75 @@ class VideoWebServer:
                 as_attachment=download,
                 download_name=os.path.basename(path),
             )
+
+        @self.app.get("/api/backups")
+        def list_backups():
+            unauthorized = self._require_auth()
+            if unauthorized:
+                return unauthorized
+            return jsonify({
+                "items": self.plugin.video_backup.list_backups(),
+                "max": 5,
+                "restore_pending": self.plugin.video_backup.restore_pending,
+            })
+
+        @self.app.post("/api/backups")
+        def create_backup():
+            unauthorized = self._require_auth()
+            if unauthorized:
+                return unauthorized
+            try:
+                result = self.plugin.video_backup.create_backup()
+            except (VideoBackupError, OSError, sqlite3.Error) as exc:
+                return jsonify({"error": str(exc) or "创建视频备份失败。"}), 400
+            return jsonify({"ok": True, "backup": result}), 201
+
+        @self.app.get("/api/backups/<backup_id>/download")
+        def download_backup(backup_id: str):
+            unauthorized = self._require_auth()
+            if unauthorized:
+                return unauthorized
+            try:
+                path = self.plugin.video_backup.backup_path(backup_id)
+            except VideoBackupError as exc:
+                return jsonify({"error": str(exc)}), 404
+            return send_file(path, mimetype="application/zip", as_attachment=True, download_name=path.name)
+
+        @self.app.delete("/api/backups/<backup_id>")
+        def delete_backup(backup_id: str):
+            unauthorized = self._require_auth()
+            if unauthorized:
+                return unauthorized
+            try:
+                self.plugin.video_backup.delete_backup(backup_id)
+            except VideoBackupError as exc:
+                return jsonify({"error": str(exc)}), 404
+            return jsonify({"ok": True})
+
+        @self.app.post("/api/backups/<backup_id>/restore")
+        def restore_backup(backup_id: str):
+            unauthorized = self._require_auth()
+            if unauthorized:
+                return unauthorized
+            try:
+                result = self.plugin.prepare_video_backup_restore(backup_id=backup_id)
+            except (VideoBackupError, OSError, sqlite3.Error) as exc:
+                return jsonify({"error": str(exc)}), 409
+            return jsonify({"ok": True, "restore": result}), 202
+
+        @self.app.post("/api/backups/upload/restore")
+        def restore_uploaded_backup():
+            unauthorized = self._require_auth()
+            if unauthorized:
+                return unauthorized
+            uploaded = request.files.get("file")
+            if uploaded is None:
+                return jsonify({"error": "请选择视频备份 ZIP 文件。"}), 400
+            try:
+                result = self.plugin.prepare_video_backup_restore(upload=uploaded.stream)
+            except (VideoBackupError, OSError, sqlite3.Error) as exc:
+                return jsonify({"error": str(exc)}), 400
+            return jsonify({"ok": True, "restore": result}), 202
 
         @self.app.post("/api/test")
         def test_channel():
